@@ -1,0 +1,4 @@
+{
+  "formatVersion": 1,
+  "budgets": { "default": 2000, "org": 4000 }
+}

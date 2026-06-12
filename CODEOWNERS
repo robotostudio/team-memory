@@ -1,0 +1,5 @@
+# Scope ownership — every Entry needs its scope Owner approval (tiered review).
+# Org-wide Standards are policy: protect entries/org/ with your standards group.
+# Swap @voidhrithik for a GitHub team (e.g. @robotostudio/standards) once it exists.
+entries/org/ @voidhrithik
+entries/stacks/ @voidhrithik
