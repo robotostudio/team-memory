@@ -1,0 +1,13 @@
+{
+  "version": "1.1.0",
+  "organization": "robotostudio",
+  "date": "March 2026",
+  "abstract": "Type-safe JSON-LD structured data implementations for Next.js using schema-dts. Complete examples for 15+ schema.org types with XSS sanitization. Includes project audit workflow to discover missing structured data across routes.",
+  "references": [
+    "https://schema.org",
+    "https://jsonld.com",
+    "https://developers.google.com/search/docs/appearance/structured-data",
+    "https://nextjs.org/docs/app/guides/json-ld",
+    "https://github.com/google/schema-dts"
+  ]
+}
