@@ -2,7 +2,7 @@
 import { createRequire } from "node:module";
 import { realpathSync } from "node:fs";
 import * as fs from "node:fs/promises";
-import { access, cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import { join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12139,15 +12139,28 @@ const hashSkillDir = async (dir) => {
 const defaultSkillsTarget = () => path.join(os.homedir(), ".claude", "skills");
 const exists = (p) => access(p).then(() => true, () => false);
 const copySkill = async (src, dest) => {
-	await rm(dest, {
-		recursive: true,
-		force: true
-	});
+	const tmp = `${dest}.tmp-${process.pid}`;
 	await mkdir(path.dirname(dest), { recursive: true });
-	await cp(src, dest, {
-		recursive: true,
-		filter: (s) => path.basename(s) !== PROVENANCE_FILE
-	});
+	try {
+		await rm(tmp, {
+			recursive: true,
+			force: true
+		});
+		await cp(src, tmp, {
+			recursive: true,
+			filter: (s) => path.basename(s) !== PROVENANCE_FILE
+		});
+		await rm(dest, {
+			recursive: true,
+			force: true
+		});
+		await rename(tmp, dest);
+	} finally {
+		await rm(tmp, {
+			recursive: true,
+			force: true
+		});
+	}
 };
 const errText = (e) => e instanceof Error ? e.message : String(e);
 /** true when memory.json explicitly declares a formatVersion newer than this tool understands */
@@ -12196,24 +12209,28 @@ const materializeSkills = async (options) => {
 				}
 				await copySkill(source, target);
 				manifest.skills[skill.name] = { hash: sourceHash };
+				await writeSkillManifest(options.home, manifest);
 				report.materialized.push(skill.name);
 				continue;
 			}
 			if (!await exists(target)) {
 				await copySkill(source, target);
 				manifest.skills[skill.name] = { hash: sourceHash };
+				await writeSkillManifest(options.home, manifest);
 				report.restored.push(skill.name);
 				continue;
 			}
 			if (await hashSkillDir(target) !== managed.hash) {
 				await copySkill(source, target);
 				manifest.skills[skill.name] = { hash: sourceHash };
+				await writeSkillManifest(options.home, manifest);
 				report.restored.push(skill.name);
 				continue;
 			}
 			if (sourceHash !== managed.hash) {
 				await copySkill(source, target);
 				manifest.skills[skill.name] = { hash: sourceHash };
+				await writeSkillManifest(options.home, manifest);
 				report.updated.push(skill.name);
 			}
 		} catch (e) {
@@ -12231,6 +12248,7 @@ const materializeSkills = async (options) => {
 					force: true
 				});
 				delete manifest.skills[name];
+				await writeSkillManifest(options.home, manifest);
 				report.removed.push(name);
 			} catch (e) {
 				report.failed.push({
@@ -12371,7 +12389,7 @@ const runDigest = async (options) => {
 		home,
 		targetDir: options.skillsTargetDir
 	});
-	const skillWarnings = skillReport ? [...skillReport.restored.map((name) => `> WARNING: team skill ${name}: local edits were replaced by the team version — promote changes via PR instead.`), ...skillReport.failed.length ? [`> WARNING: ${skillReport.failed.length} team skill(s) failed to materialize — run roboto-mem status.`] : []] : [];
+	const skillWarnings = skillReport ? [...skillReport.restored.map((name) => `> WARNING: team skill ${name}: restored — local edits were replaced by the team version. Promote changes via PR instead.`), ...skillReport.failed.length ? [`> WARNING: ${skillReport.failed.length} team skill(s) failed to materialize — run roboto-mem status.`] : []] : [];
 	const commonsLoad = await loadMemory(synced.commons.dir);
 	if (!commonsLoad.ok) {
 		if (commonsLoad.reason === "newer-format") return staleResult(hook, home, cwd);
@@ -12625,13 +12643,16 @@ upstream. Review skill PRs like code: watch for exfiltration, network calls, and
 "run this command" patterns. Personal skills with the same name always win on a
 teammate's machine (reported as shadowed, never overwritten).
 `;
-const MEMORY_CI_YML = `# memory-ci — validates entry frontmatter and structure on every PR.
+const MEMORY_CI_YML = `# memory-ci — validates entries and skills on every PR, and on pushes to main
+# so a direct push can never leave main silently broken for every later PR.
 # The roboto-mem CLI is vendored at .roboto-mem/cli.mjs by \`roboto-mem init --commons\`,
 # so this workflow needs no tokens and no network. Update the vendored CLI via a normal PR.
 name: memory-ci
 
 on:
   pull_request:
+  push:
+    branches: [main]
 
 jobs:
   lint:
@@ -12643,7 +12664,7 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Lint entries
+      - name: Lint entries and skills
         run: node .roboto-mem/cli.mjs lint
 `;
 //#endregion
@@ -13209,7 +13230,13 @@ const fetchUpstream = async (url, ref) => {
 const locateSkillDir = async (cloneDir, skillArg) => {
 	const hasSkillMd = async (rel) => readFile(path.join(cloneDir, rel, "SKILL.md"), "utf8").then(() => true, () => false);
 	if (skillArg) {
-		const candidates = [`skills/${skillArg}`, skillArg];
+		if (path.isAbsolute(skillArg) || skillArg.includes("\\") || skillArg.split("/").includes("..")) return {
+			ok: false,
+			error: `Invalid --skill "${skillArg}" — must be a skill name or repo-relative path without ".."`
+		};
+		const root = path.resolve(cloneDir) + path.sep;
+		const contained = (rel) => path.resolve(cloneDir, rel).startsWith(root);
+		const candidates = [`skills/${skillArg}`, skillArg].filter(contained);
 		for (const rel of candidates) if (await hasSkillMd(rel)) return {
 			ok: true,
 			relDir: rel,
@@ -13471,28 +13498,36 @@ const runStatus = async (options) => {
 				const manifest = await readSkillManifest(home);
 				const target = options.skillsTargetDir ?? defaultSkillsTarget();
 				const classified = await Promise.all(skillsLoad.skills.map(async (skill) => {
-					const managed = manifest.skills[skill.name];
-					const targetPath = path.join(target, skill.name);
-					if (!managed) return {
-						name: skill.name,
-						state: await cloneExists(targetPath) ? "shadowed" : "pending"
-					};
-					const drifted = await cloneExists(targetPath) && await hashSkillDir(targetPath) !== managed.hash;
-					return {
-						name: skill.name,
-						state: drifted ? "drifted" : "materialized"
-					};
+					try {
+						const managed = manifest.skills[skill.name];
+						const targetPath = path.join(target, skill.name);
+						if (!managed) return {
+							name: skill.name,
+							state: await cloneExists(targetPath) ? "shadowed" : "pending"
+						};
+						const drifted = await cloneExists(targetPath) && await hashSkillDir(targetPath) !== managed.hash;
+						return {
+							name: skill.name,
+							state: drifted ? "drifted" : "materialized"
+						};
+					} catch {
+						return {
+							name: skill.name,
+							state: "invalid"
+						};
+					}
 				}));
 				const names = (s) => classified.filter((c) => c.state === s).map((c) => c.name);
 				const count = (s) => classified.filter((c) => c.state === s).length;
 				const shadowed = names("shadowed");
 				const drifted = names("drifted");
+				const invalidCount = skillsLoad.errors.length + classified.filter((c) => c.state === "invalid").length;
 				const segments = [
 					`${count("materialized")} materialized`,
 					...count("pending") ? [`${count("pending")} pending sync`] : [],
 					...shadowed.length ? [`shadowed by personal: ${shadowed.join(", ")}`] : [],
 					...drifted.length ? [`drifted (sync will restore): ${drifted.join(", ")}`] : [],
-					...skillsLoad.errors.length ? [`${skillsLoad.errors.length} invalid`] : []
+					...invalidCount ? [`${invalidCount} invalid`] : []
 				];
 				lines.push(`skills: ${segments.join(", ")}`);
 				if (manifest.materializedAt) lines.push(`skills last materialized: ${manifest.materializedAt}`);

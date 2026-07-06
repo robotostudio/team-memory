@@ -1,10 +1,13 @@
-# memory-ci — validates entry frontmatter and structure on every PR.
+# memory-ci — validates entries and skills on every PR, and on pushes to main
+# so a direct push can never leave main silently broken for every later PR.
 # The roboto-mem CLI is vendored at .roboto-mem/cli.mjs by `roboto-mem init --commons`,
 # so this workflow needs no tokens and no network. Update the vendored CLI via a normal PR.
 name: memory-ci
 
 on:
   pull_request:
+  push:
+    branches: [main]
 
 jobs:
   lint:
@@ -16,5 +19,5 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Lint entries
+      - name: Lint entries and skills
         run: node .roboto-mem/cli.mjs lint
