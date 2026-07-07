@@ -1,6 +1,7 @@
 # Linear ticket — one per page
 
-Opt-in step. One issue per page containing all deltas with **inline** screenshots. Uses the hosted
+Runs automatically after classification (SKILL.md step 5). One issue per page containing all
+deltas with **inline** screenshots. Uses the hosted
 Linear MCP (`mcp__plugin_linear_linear__*`) — OAuth only, no API key. If the first tool call fails
 with an auth error, run `mcp__plugin_linear_linear__authenticate`, have the user complete the
 browser flow, then `complete_authentication`.
@@ -43,8 +44,7 @@ When you `save_issue`, Linear auto-rewrites each `uploads.linear.app` URL with a
 and renders it inline — that rewrite in the response confirms the image was accepted.
 
 ## 3. Issue content (keep it un-bloated)
-Formatting rules (user preference — follow exactly; these are TICKET-only, the HTML report keeps
-its emoji/pills/middots):
+Formatting rules (user preference — follow exactly):
 - **No em dashes** anywhere in the ticket. Use a hyphen `-` or parentheses.
 - **Short, readable title**: `<Page> - Figma/live site parity` (no counts, no punctuation clutter).
 - In **Links**, each label is an **H4 with no colon** and the URL goes on the **line directly below**
@@ -99,15 +99,10 @@ Create/update with `save_issue` (create = omit `id`; it needs `team`, `title`, a
 `description`). Two calls total: one to create (placeholder body → get the key for uploads), one to
 set the full description. Markdown wants **literal** newlines (no `\n` escapes).
 
-## 4. Reflect the ticket back in the report
+## 4. Record the ticket
 - Print the ticket URL/key in the terminal.
-- Add `"ticketUrl"` and `"ticketKey"` to `/tmp/ui-match/$SLUG.findings.json`, then re-run
-  `python3 $SKILL_DIR/scripts/build_report.py /tmp/ui-match/$SLUG.findings.json --outdir /tmp/ui-match`.
-  The report header now shows a 🎫 **Linear ticket: <key> ↗** banner and the index card gets a 🎫 marker.
+- Add `"ticketUrl"` and `"ticketKey"` to `/tmp/ui-match/$SLUG.findings.json` as the record.
 
 ## Notes
-- Trigger is the **terminal prompt** in SKILL.md step 6 — there is no in-page button (a static
-  report can't call Linear without a stored credential).
 - Match the user's Linear ticket conventions if known (short bullets, no acceptance-criteria
   padding, no em dashes). Screenshots only for actionable deltas; matched stays text.
-- If the user declines the ticket, do nothing — the HTML report is the deliverable.
