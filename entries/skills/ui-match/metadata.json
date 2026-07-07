@@ -1,8 +1,8 @@
 {
-  "version": "1.0.0",
+  "version": "2.0.0",
   "organization": "robotostudio",
   "date": "July 2026",
-  "abstract": "Compares a page's Figma design against the live website and reports which page-builder components are missing on the site, extra on the site, built differently, or matched. Produces a clickable HTML report with side-by-side screenshots served on localhost, and optionally files one Linear ticket per page with inline screenshots. Existence-only comparison (is the component built?), not a pixel diff.",
+  "abstract": "Compares a page's Figma design against the live website and reports which page-builder components are missing on the site, extra on the site, built differently, or matched. Files one Linear ticket per page automatically, with inline screenshots for each delta. Existence-only comparison (is the component built?), not a pixel diff.",
   "references": [
     "https://www.figma.com/developers",
     "https://linear.app/developers",
