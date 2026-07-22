@@ -147,7 +147,6 @@ lastUpdated: 2026-05-15
   "field": "value"
 }
 ```
-````
 
 ## Related
 
@@ -157,7 +156,4 @@ lastUpdated: 2026-05-15
 ## Walkthrough
 
 https://www.loom.com/share/<id>
-
-```
-
-```
+````
