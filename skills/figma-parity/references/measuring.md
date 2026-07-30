@@ -30,12 +30,16 @@ If a sweep returns identical numbers for pages you know differ, suspect this bef
 
 ## Read computed styles
 
-Playwright is present but not linked at the repo root; import it by path:
+Playwright is usually a transitive dep and not linked at the project root, so a bare
+`playwright` specifier does not resolve. Resolve the absolute path once, in the project
+under test, and import that:
+
+```bash
+node -e "console.log(require.resolve('playwright'))"
+```
 
 ```js
-const { chromium } = await import(
-  "/Users/sameer/Code/work/gc-web/node_modules/.pnpm/playwright@1.61.1/node_modules/playwright/index.mjs"
-);
+const { chromium } = await import("<the path that printed>");
 
 const browser = await chromium.launch();
 const page = await browser.newPage();

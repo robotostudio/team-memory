@@ -77,6 +77,9 @@ Workflow({ scriptPath: "<skill dir>/engine/figma-parity-verify.js", args: {
   baseUrl:  "http://localhost:3100",
   route:    "/terms",
   frozenAt: 1440,
+  // resolve once in the project under test:
+  //   node -e "console.log(require.resolve('playwright'))"
+  playwrightPath: "<absolute path to playwright/index.mjs>",
   regions: [
     { name: "header",  selector: "article > header",
       nodes: { "393": "1948:107772", "840": "1948:107547" } },

@@ -14,12 +14,20 @@ export const meta = {
 //   route:    '/terms'
 //   frozenAt: 1440                      — width that must not have moved (0 to skip)
 //   regions:  [{ name, selector, nodes: { '393': '1948:107772', '840': '1948:107547' } }]
+//   playwrightPath: '/abs/path/to/playwright/index.mjs'
 // }
-const { baseUrl, route, regions, frozenAt } = args
+const { baseUrl, route, regions, frozenAt, playwrightPath } = args
 const BREAKPOINTS = ['393', '840']
 
-const PLAYWRIGHT =
-  '/Users/sameer/Code/work/gc-web/node_modules/.pnpm/playwright@1.61.1/node_modules/playwright/index.mjs'
+// Absolute, because playwright is usually a transitive dep and not linked at the
+// project root — a bare 'playwright' specifier does not resolve from an agent's cwd.
+// The caller resolves it; hardcoding one machine's path here breaks every other.
+if (!playwrightPath) {
+  throw new Error(
+    "playwrightPath is required — resolve it in the target project with:\n" +
+      "  node -e \"console.log(require.resolve('playwright'))\"",
+  )
+}
 
 const FINDINGS = {
   type: 'object',
@@ -64,7 +72,7 @@ Figma tools are deferred — load them first:
   ToolSearch({ query: "select:mcp__figma-dev-mode__get_screenshot,mcp__figma-dev-mode__get_metadata,mcp__figma-dev-mode__get_design_context", max_results: 5 })
 
 Screenshot the rendered region with playwright (imported by absolute path, it is not linked at the repo root):
-  const { chromium } = await import("${PLAYWRIGHT}")
+  const { chromium } = await import("${playwrightPath}")
   const b = await chromium.launch(); const p = await b.newPage()
   await p.setViewportSize({ width: <bp>, height: 1200 })
   await p.goto("${baseUrl}${route}", { waitUntil: "domcontentloaded" })
