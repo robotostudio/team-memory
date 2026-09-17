@@ -33,9 +33,13 @@ You can't create it and must never see it. Give the user these steps.
 1. Open `https://www.sanity.io/organizations/<org-id>/api/tokens`. Give the user this link with the org id filled in. From `sanity.io/manage` it is the **organisation**, not a project, then **API**, then **Tokens**. A URL containing `/project/<id>/api` is the project's token page, which offers only Developer, Editor, Contributor and Viewer.
 2. Add a token with **Context Viewer** permission only. A project token fails with a 403, however broad its permissions, because Editor and the other project roles say nothing about the organisation's Knowledge Bases.
 3. Create one token per tool, named after it, such as `kb-cursor`. A leaked token then breaks one tool.
-4. Store it in an environment variable, never in a committed file. Check first whether `SANITY_ORGANIZATION_TOKEN` is already set for another organisation. If it is, leave it alone, store the new token under its own name such as `SANITY_<PROJECT>_CONTEXT_TOKEN`, and use that name in the agent config too.
-   - Windows: `setx SANITY_ORGANIZATION_TOKEN "<token>"` in PowerShell or cmd, then fully restart the agent app. An app that stays in the system tray has to be quit from there, because closing its window leaves it running.
-   - macOS and Linux: add `export SANITY_ORGANIZATION_TOKEN="<token>"` to the shell profile, then restart the terminal.
+4. Store it in an environment variable, never in a committed file. Pick the variable name first. It is `<TOKEN_VAR>` in every command and config below.
+   - Default to `SANITY_ORGANIZATION_TOKEN`.
+   - Check whether that name is already set for another organisation. If it is, leave it alone, because overwriting it breaks that organisation's agents with a 401. Use a name of its own, such as `SANITY_<PROJECT>_CONTEXT_TOKEN`.
+
+   Then the user stores the token under that name.
+   - Windows: `setx <TOKEN_VAR> "<token>"` in PowerShell or cmd, then fully restart the agent app. An app that stays in the system tray has to be quit from there, because closing its window leaves it running.
+   - macOS and Linux: add `export <TOKEN_VAR>="<token>"` to the shell profile, then restart the terminal.
 
 A Context Viewer token reads every endpoint in the organisation, and hosted tools such as v0, Lovable and Replit store it on their servers. For client work, use the client's own organisation.
 
@@ -47,7 +51,7 @@ If the endpoint is already connected to you as MCP tools, call `initial_context`
 
 ```bash
 curl -s -X POST "https://api.sanity.io/v1/context/organizations/<org-id>/mcp/<endpoint-name>" \
-  -H "Authorization: Bearer $SANITY_ORGANIZATION_TOKEN" \
+  -H "Authorization: Bearer $<TOKEN_VAR>" \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"initial_context","arguments":{}}}'
@@ -74,7 +78,7 @@ Claude Code, Cursor and Codex were checked against their docs on 2026-09-16, and
     "<kb-name>": {
       "type": "http",
       "url": "https://api.sanity.io/v1/context/organizations/<org-id>/mcp/<endpoint-name>",
-      "headers": { "Authorization": "Bearer ${SANITY_ORGANIZATION_TOKEN}" }
+      "headers": { "Authorization": "Bearer ${<TOKEN_VAR>}" }
     }
   }
 }
@@ -89,7 +93,7 @@ Claude Code, Cursor and Codex were checked against their docs on 2026-09-16, and
   "mcpServers": {
     "<kb-name>": {
       "url": "https://api.sanity.io/v1/context/organizations/<org-id>/mcp/<endpoint-name>",
-      "headers": { "Authorization": "Bearer ${env:SANITY_ORGANIZATION_TOKEN}" }
+      "headers": { "Authorization": "Bearer ${env:<TOKEN_VAR>}" }
     }
   }
 }
@@ -104,7 +108,7 @@ Cursor's syntax is `${env:NAME}`, not `${NAME}`. A reported bug makes remote ser
 ```toml
 [mcp_servers.<kb-name>]
 url = "https://api.sanity.io/v1/context/organizations/<org-id>/mcp/<endpoint-name>"
-bearer_token_env_var = "SANITY_ORGANIZATION_TOKEN"
+bearer_token_env_var = "<TOKEN_VAR>"
 ```
 
 ### Hosted tools and any other agent
