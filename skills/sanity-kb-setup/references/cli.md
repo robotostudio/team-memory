@@ -21,7 +21,7 @@ Found in `@sanity/cli` 8.11.0 under `sanity context`. `npx sanity context <comma
 | Job status | `npx sanity context jobs get <kb-id> <job-id> --watch` |
 | Delete | `npx sanity context delete <kb-id>` |
 
-Bash expands backticks and `$(...)` inside double quotes. Before you run a command, check that the title, purpose, query, path or URL you put in it holds neither, and no unescaped `"`. If one does, escape it for the user's shell or have the user enter the value in the dashboard.
+Bash expands backticks and `$(...)` inside double quotes. Before you run a command, check that every value you put in it, whether a title, purpose, query, inline text, path or URL, holds neither, and no unescaped `"`. If one does, escape it for the user's shell or have the user enter the value in the dashboard.
 
 `context get --json` returns `state`, `openIssueCount`, `instructionCount`, `lastChangedAt` for the last build, `pendingChanges`, `sourceUsage` and the refresh schedule.
 
