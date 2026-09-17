@@ -65,27 +65,37 @@ async function readKnowledgeBase() {
 }
 
 async function listIssues(knowledgeBase) {
-  const client = await getGlobalCliClient({
-    apiVersion: API_VERSION,
-    requireUser: true,
-    resource: { id: knowledgeBase.publicId, type: 'knowledge-base' },
-    context: { organizationId: knowledgeBase.organizationId },
-  })
+  let issues
+  try {
+    const client = await getGlobalCliClient({
+      apiVersion: API_VERSION,
+      requireUser: true,
+      resource: { id: knowledgeBase.publicId, type: 'knowledge-base' },
+      context: { organizationId: knowledgeBase.organizationId },
+    })
+    issues = await client.context.issues.list(status ? { status } : undefined)
+  } catch (error) {
+    console.error(`Could not list issues for "${knowledgeBaseId}": ${error.message}`)
+    console.error('A 403 means the logged-in user lacks access to this Knowledge Base. A missing `context.issues` means the project\'s `sanity` package is too old.')
+    process.exitCode = 1
+    return
+  }
 
-  const issues = await client.context.issues.list(status ? { status } : undefined)
+  // Sanity's openIssueCount is often wrong. When the list includes open issues, count them here
+  // so both outputs carry a number that can be trusted next to the counter.
+  const listCoversOpen = !status || status === 'open'
+  const openInList = listCoversOpen ? issues.filter((issue) => issue.status === 'open').length : null
 
   if (asJson) {
-    console.log(JSON.stringify({ knowledgeBase: summary(knowledgeBase), issues }, null, 2))
+    console.log(JSON.stringify({ knowledgeBase: { ...summary(knowledgeBase), openInList }, issues }, null, 2))
     return
   }
 
   console.log(`${knowledgeBase.title} (${knowledgeBase.publicId})`)
   console.log(`State: ${knowledgeBase.state}. Last built: ${knowledgeBase.lastChangedAt ?? 'never'}.`)
   console.log(`Showing ${issues.length} ${status ?? 'issues of any status'}.`)
-  // Only compare like with like: the counter covers open issues, so count those in the list.
-  if (!status || status === 'open') {
-    const open = issues.filter((issue) => issue.status === 'open').length
-    console.log(`${open} open in this list, which is the count to trust. Sanity's openIssueCount reads ${knowledgeBase.openIssueCount} and is often wrong.`)
+  if (listCoversOpen) {
+    console.log(`${openInList} open in this list, which is the count to trust. Sanity's openIssueCount reads ${knowledgeBase.openIssueCount} and is often wrong.`)
   }
   console.log('')
 

@@ -47,7 +47,7 @@ A Context Viewer token reads every endpoint in the organisation, and hosted tool
 
 A working connection may still be the wrong Knowledge Base. In testing, an inherited `SANITY_CONTEXT_MCP_URL` pointed at another project's endpoint, and every check passed against the wrong content. Always write the URL out in full. Don't read it from an environment variable someone set earlier.
 
-If the endpoint is already connected to you as MCP tools, call `initial_context` yourself. Otherwise use this one-off diagnostic request, tested on 2026-09-17.
+If the endpoint is already connected to you as MCP tools, call `initial_context` yourself. Otherwise use this one-off diagnostic request, tested on 2026-09-17. Use the form for the shell you are in. PowerShell reads an environment variable as `$env:NAME`. A bash-style `$NAME` expands to nothing there, so the header goes out empty and the endpoint answers 401.
 
 ```bash
 curl -s -X POST "https://api.sanity.io/v1/context/organizations/<org-id>/mcp/<endpoint-name>" \
@@ -56,6 +56,14 @@ curl -s -X POST "https://api.sanity.io/v1/context/organizations/<org-id>/mcp/<en
   -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"initial_context","arguments":{}}}'
 ```
+
+```powershell
+$headers = @{ Authorization = "Bearer $env:<TOKEN_VAR>"; Accept = "application/json, text/event-stream" }
+$body = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"initial_context","arguments":{}}}'
+(Invoke-WebRequest -UseBasicParsing -Method Post -Uri "https://api.sanity.io/v1/context/organizations/<org-id>/mcp/<endpoint-name>" -Headers $headers -ContentType "application/json" -Body $body).Content
+```
+
+In Windows PowerShell 5.1, `curl` is an alias for `Invoke-WebRequest`, so the bash form fails there. `setx` reaches only shells started afterwards, so open a new one first.
 
 Done when all four hold. `blocked.md` covers the HTTP errors.
 

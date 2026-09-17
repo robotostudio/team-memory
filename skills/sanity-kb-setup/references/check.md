@@ -14,7 +14,7 @@ In testing, a build kept "we ship to the US" from an FAQ against a delivery poli
 
 1. **Read the state** with `npx sanity context get <kb-id> --json`. Note `state`, `instructionCount`, `lastChangedAt` and `pendingChanges`. Ignore `openIssueCount`.
 2. **Read every entry.** `api.md` shows `entries.list()` and `entries.get({ path })`, which work before any MCP endpoint exists. If an endpoint is already connected to you, `initial_context` and `knowledge_base_read` return the same text.
-3. **List the open issues** with `node <skill-folder>/scripts/kb-issues.mjs <kb-id> --status open --json`, run from the project folder. Always run it, whatever `openIssueCount` says. The counter is wrong in both directions. In testing it read 2 with 1 issue open, 0 with 7 open, and 10 with 13 open. The list is the only count to report or act on.
+3. **List the open issues** with `node <skill-folder>/scripts/kb-issues.mjs <kb-id> --status open --json`, run from the project folder. Always run it, whatever `openIssueCount` says. The counter is wrong in both directions. In testing it read 2 with 1 issue open, 0 with 7 open, and 10 with 13 open. The list is the only count to report or act on. In the `--json` output it is `knowledgeBase.openInList`.
 4. **Build the comparison**, one row per disagreement from section 10 plus any you spot in the entries.
 
    | Fact | Source claims | The entry says | Issue raised? |
