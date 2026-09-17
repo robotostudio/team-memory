@@ -69,7 +69,8 @@ The dataset is empty only after all five pass.
 | Symptom | Means | Step |
 |---|---|---|
 | 401 | The token is missing, expired or mistyped, or the app can't see the variable | On Windows, `setx` reaches only apps started afterwards, so restart the app fully. For Cursor, see the `${env:...}` bug in `connect-agents.md` |
-| 403 with `contextGrantRequired` | A project token, or no Context Viewer | The user creates a new token at organisation level |
+| 401 with "Not a member of this organization" | The token belongs to a different organisation, often left in the environment by an earlier project | The user creates one in this organisation and stores it under its own variable name. `connect-agents.md` step 2 has the link |
+| 403 with `contextGrantRequired`, or "No access to knowledge base '<id>'. Requires one of: sanity.knowledge-base.read" | A project token, or no Context Viewer. The second message names the Knowledge Base the endpoint serves, so the endpoint itself is right | The user creates a new token at organisation level, from the link in `connect-agents.md` step 2 |
 | 404 | The organisation id or endpoint name in the URL is wrong | The name is the one chosen at creation, not the title |
 | 400 or 406 | A header is missing | Send `Content-Type: application/json` and `Accept: application/json, text/event-stream` |
 | Error -32005, or a 200 with `"isError": true` | The endpoint has no readable Knowledge Base. None is attached, or the first build hasn't finished | Read the body on every call. A 200 doesn't mean the tool call worked |

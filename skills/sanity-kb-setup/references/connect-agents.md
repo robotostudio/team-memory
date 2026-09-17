@@ -30,11 +30,11 @@ The CLI can't. Walk the user through it.
 
 You can't create it and must never see it. Give the user these steps.
 
-1. Open `sanity.io/manage`, choose the **organisation**, not a project, then **API**, then **Tokens**.
-2. Add a token with **Context Viewer** permission only. A project token fails with a 403 and `contextGrantRequired`, however broad its permissions.
+1. Open `https://www.sanity.io/organizations/<org-id>/api/tokens`. Give the user this link with the org id filled in. From `sanity.io/manage` it is the **organisation**, not a project, then **API**, then **Tokens**. A URL containing `/project/<id>/api` is the project's token page, which offers only Developer, Editor, Contributor and Viewer.
+2. Add a token with **Context Viewer** permission only. A project token fails with a 403, however broad its permissions, because Editor and the other project roles say nothing about the organisation's Knowledge Bases.
 3. Create one token per tool, named after it, such as `kb-cursor`. A leaked token then breaks one tool.
-4. Store it in an environment variable, never in a committed file.
-   - Windows: `setx SANITY_ORGANIZATION_TOKEN "<token>"`, then fully restart the agent app.
+4. Store it in an environment variable, never in a committed file. Check first whether `SANITY_ORGANIZATION_TOKEN` is already set for another organisation. If it is, leave it alone, store the new token under its own name such as `SANITY_<PROJECT>_CONTEXT_TOKEN`, and use that name in the agent config too.
+   - Windows: `setx SANITY_ORGANIZATION_TOKEN "<token>"` in PowerShell or cmd, then fully restart the agent app. An app that stays in the system tray has to be quit from there, because closing its window leaves it running.
    - macOS and Linux: add `export SANITY_ORGANIZATION_TOKEN="<token>"` to the shell profile, then restart the terminal.
 
 A Context Viewer token reads every endpoint in the organisation, and hosted tools such as v0, Lovable and Replit store it on their servers. For client work, use the client's own organisation.
