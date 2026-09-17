@@ -22,7 +22,7 @@ You know this project's schema, so prepare small, specific edits for it.
    - the user edits in Studio from your change list.
 
    Whichever path you use, open `api.md` first and follow its draft rules. In draft mode, edit only the draft. For a direct publish, a draft that holds the losing claim needs its own approved correction.
-5. **Handle what isn't a dataset field.** For a file source, correct the file, delete the old import and add the new file. For a claim hardcoded in the site's code, report the file and line.
+5. **Handle what isn't a dataset field.** For a file source, put the file's correction, the import to delete and the new upload in the change list. Once the user approves them and names that import, correct the file, delete the old import and add the new file. For a claim hardcoded in the site's code, report the file and line.
 6. **Verify.** The Knowledge Base reads published documents only, so wait until the user has published any drafts. Done when a query of the changed fields returns the new values.
 7. **Refresh, then rebuild**, in that order. A build reuses the content from the last import, so a rebuild straight after an edit still sees the old text.
    ```

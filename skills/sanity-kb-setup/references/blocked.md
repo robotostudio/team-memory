@@ -9,7 +9,7 @@ Find the symptom, tell the user what it means in one sentence, and give them the
 | No `sanity.config.ts` or `sanity.cli.ts`, in the root or under `apps/studio` | No Sanity project here | If they have one elsewhere, work in that folder. If not, they run `npm create sanity@latest`, or `npx sanity@latest init` inside a Next.js app for an embedded Studio. They finish the schema and publish content before stage 1 |
 | "You must be logged in", or a command asks for a login | No CLI session | The user runs `npx sanity login` and picks their provider in the browser. You can't do this for them. Afterwards `npx sanity projects list` prints their projects. Stages 1 to 5 use that login and need no token |
 | `npx sanity context` doesn't exist | The `sanity` package is too old | Update it with the project's package manager, then check `npx sanity context --help`. If the commands are still missing, do stage 2 in the dashboard at `sanity.io/@<org-id>/context` from `kb-setup.md` |
-| No Context app in the dashboard, or create returns "not enabled" | Knowledge Bases are an opt-in beta | An organisation admin turns on Context and Knowledge Bases on the organisation's **Apps** page in `sanity.io/manage`. A user who isn't an admin asks the organisation's owner |
+| No Context app in the dashboard, or create returns "not enabled" | Knowledge Bases are an opt-in beta | In `sanity.io/manage`, an organisation admin turns on Context from the organisation's **Labs** page and Knowledge Bases from its **Apps** page. A user who isn't an admin asks the organisation's owner |
 | No organisation id | It is in `npx sanity projects list` and in the dashboard URL `sanity.io/@<org-id>/...` | A project outside any organisation can't have a Knowledge Base. The user moves it into one from the project's settings in Manage |
 
 ## A suspect zero
@@ -27,7 +27,7 @@ The dataset is empty only after all five pass.
 | Project | Step |
 |---|---|
 | Real | Stop. The Knowledge Base needs published content, and it comes from the user, through Studio or their own migration. Never seed, import or generate content here, and don't offer to |
-| Demo, meaning the user calls it a demo or a test, usually with fictional content and a seed script in the repo | A seed script is fine. Ask before running it, because seed scripts often replace documents by id and wipe Studio edits. It usually needs a write token in `.env.local`, which the user creates under the **project's** API settings in Manage with Editor permission and pastes in themselves |
+| Demo, meaning the user calls it a demo or a test, usually with fictional content and a seed script in the repo | A seed script is fine. Ask before running it, because seed scripts often replace documents by id and wipe Studio edits. It usually needs a write token in `.env.local`, which the user creates under the **project's** API settings in Manage with Editor permission and pastes in themselves. When the script reads a token, give the user the command and let them run it. Never open `.env.local` |
 
 ## Creating
 

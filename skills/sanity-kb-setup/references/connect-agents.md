@@ -22,7 +22,7 @@ The CLI can't. Walk the user through it.
 
 1. Open `sanity.io/@<org-id>/context`.
 2. Next to **MCP endpoints**, press **New**.
-3. Name it with lowercase letters, numbers and hyphens, up to 64 characters. The name goes in the URL and can't change later.
+3. Name it with lowercase letters, numbers and hyphens, up to 64 characters. Sanity rejects `by-name` and any name made of `mcp` plus eight characters. The name goes in the URL and can't change later.
 4. Pick this Knowledge Base as the **only** source. With a dataset source attached too, the endpoint runs in GROQ mode and ignores the Knowledge Base.
 5. Leave the instructions empty.
 
@@ -55,7 +55,7 @@ curl -s -X POST "https://api.sanity.io/v1/context/organizations/<org-id>/mcp/<en
 
 Done when all four hold. `blocked.md` covers the HTTP errors.
 
-1. The text contains ``Knowledge base id: `<kb-id>` `` with the id from `kb-setup.md`. A different id, or several, means the endpoint has the wrong sources. Several Knowledge Bases on one endpoint is allowed, and then every question has to name the right one.
+1. The text contains ``Knowledge base id: `<kb-id>` `` with the id from `kb-setup.md`. A different id, or several, means the endpoint has the wrong sources for this setup. Sanity allows several Knowledge Bases on one endpoint, but then every question has to name the right one, so this skill uses one.
 2. The response has no `"isError": true`. MCP reports a failed tool inside a successful response, so an HTTP 200 proves nothing.
 3. With the body `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`, the endpoint lists two tools. Four means GROQ mode, so go back to step 1.4.
 4. `knowledge_base_read` with `{"knowledgeBase":"<kb-id>","paths":["<entry-path>"]}` returns a body that matches what stage 3 read.
@@ -66,7 +66,7 @@ Claude Code, Cursor and Codex were checked against their docs on 2026-09-16, and
 
 ### Claude Code
 
-`.mcp.json` in the project.
+`.mcp.json` in the project. Claude Code keeps a project server inactive until the user trusts the workspace and approves that server, which it asks for when they next run `claude` there.
 
 ```json
 {
@@ -99,7 +99,7 @@ Cursor's syntax is `${env:NAME}`, not `${NAME}`. A reported bug makes remote ser
 
 ### Codex
 
-`~/.codex/config.toml`, or `.codex/config.toml` in the repo.
+`~/.codex/config.toml`, or `.codex/config.toml` in the repo. Codex reads the repo file only in a project the user has trusted.
 
 ```toml
 [mcp_servers.<kb-name>]
@@ -109,7 +109,7 @@ bearer_token_env_var = "SANITY_ORGANIZATION_TOKEN"
 
 ### Hosted tools and any other agent
 
-Every tool needs the same two values. Enter the endpoint URL as a direct remote server. Where the tool offers a choice of authentication, pick a bearer token or API key instead of OAuth, because Sanity Context has no OAuth flow. The user pastes the token themselves.
+Every tool needs the same two values. Enter the endpoint URL as a direct remote server. Where the tool offers a choice of authentication, pick the bearer token option instead of OAuth, because Sanity Context has no OAuth flow. If the tool only offers custom headers, add one named `Authorization` with the value `Bearer <token>`. The token must travel in that header, never in a query string or a differently named header. The user pastes the token themselves.
 
 | Tool | Steps |
 |---|---|
