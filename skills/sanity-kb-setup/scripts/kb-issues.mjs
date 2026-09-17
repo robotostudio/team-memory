@@ -81,7 +81,13 @@ async function listIssues(knowledgeBase) {
 
   console.log(`${knowledgeBase.title} (${knowledgeBase.publicId})`)
   console.log(`State: ${knowledgeBase.state}. Last built: ${knowledgeBase.lastChangedAt ?? 'never'}.`)
-  console.log(`Showing ${issues.length} ${status ?? 'issues of any status'}. This list is the count to trust. Sanity's openIssueCount reads ${knowledgeBase.openIssueCount} and is often wrong.\n`)
+  console.log(`Showing ${issues.length} ${status ?? 'issues of any status'}.`)
+  // Only compare like with like: the counter covers open issues, so count those in the list.
+  if (!status || status === 'open') {
+    const open = issues.filter((issue) => issue.status === 'open').length
+    console.log(`${open} open in this list, which is the count to trust. Sanity's openIssueCount reads ${knowledgeBase.openIssueCount} and is often wrong.`)
+  }
+  console.log('')
 
   issues.forEach((issue, index) => {
     const content = issue.content ?? {}
