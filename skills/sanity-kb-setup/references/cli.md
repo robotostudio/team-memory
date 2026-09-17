@@ -14,16 +14,18 @@ Found in `@sanity/cli` 8.11.0 under `sanity context`. `npx sanity context <comma
 | Add website | `npx sanity context imports create <kb-id> --url <url>` |
 | Add inline text | `npx sanity context imports create <kb-id> --text "<text>" --title "<title>"` |
 | List sources | `npx sanity context imports list <kb-id> --json` |
-| Remove a source | `npx sanity context imports delete <kb-id> <import-id>` |
+| Remove a source | `npx sanity context imports delete <kb-id> <import-id> --yes` |
 | Build | `npx sanity context build <kb-id> --watch` |
 | Refresh | `npx sanity context refresh <kb-id>` |
 | Refresh schedule | `npx sanity context update <kb-id> --refresh-enabled --refresh-frequency weekly` |
 | Job status | `npx sanity context jobs get <kb-id> <job-id> --watch` |
-| Delete | `npx sanity context delete <kb-id>` |
+| Delete | `npx sanity context delete <kb-id> --yes` |
+
+Both delete commands refuse without `--yes` when no terminal is attached, with "Deletion requires confirmation". `--yes` skips the CLI's own prompt, so the user naming that Knowledge Base or import is the only confirmation there is. Get it before you run either one.
 
 Bash expands backticks and `$(...)` inside double quotes. Before you run a command, check that every value you put in it, whether a title, purpose, query, inline text, path or URL, holds neither, and no unescaped `"`. If one does, escape it for the user's shell or have the user enter the value in the dashboard.
 
-`context get --json` returns `state`, `openIssueCount`, `instructionCount`, `lastChangedAt` for the last build, `pendingChanges`, `sourceUsage` and the refresh schedule.
+`context get --json` returns `state`, `openIssueCount`, `instructionCount`, `lastChangedAt` for the last build, `pendingChanges`, `sourceUsage` and the refresh schedule. Ignore `openIssueCount`. `check.md` says why.
 
 The dataset import accepts `pt::text()` and conditional projections such as `_type == 'x' => { }`.
 

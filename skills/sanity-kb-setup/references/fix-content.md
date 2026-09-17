@@ -37,4 +37,4 @@ You know this project's schema, so prepare small, specific edits for it.
 
 ## Clean
 
-`state` is `ready`, open conflicts are 0, `pendingChanges` is all zeros, and every row of the stage 3 table shows the winning claim in its entry.
+`state` is `ready`, the issues list shows 0 open conflicts, `pendingChanges` is all zeros, and every row of the stage 3 table shows the winning claim in its entry.
