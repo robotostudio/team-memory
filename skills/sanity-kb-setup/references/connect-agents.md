@@ -60,10 +60,12 @@ curl -s -X POST "https://api.sanity.io/v1/context/organizations/<org-id>/mcp/<en
 ```powershell
 $headers = @{ Authorization = "Bearer $env:<TOKEN_VAR>"; Accept = "application/json, text/event-stream" }
 $body = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"initial_context","arguments":{}}}'
-(Invoke-WebRequest -UseBasicParsing -Method Post -Uri "https://api.sanity.io/v1/context/organizations/<org-id>/mcp/<endpoint-name>" -Headers $headers -ContentType "application/json" -Body $body).Content
+$uri = "https://api.sanity.io/v1/context/organizations/<org-id>/mcp/<endpoint-name>"
+try { (Invoke-WebRequest -UseBasicParsing -Method Post -Uri $uri -Headers $headers -ContentType "application/json" -Body $body).Content }
+catch { $r = $_.Exception.Response; if ($r) { "HTTP " + [int]$r.StatusCode; $s = $r.GetResponseStream(); $s.Position = 0; (New-Object IO.StreamReader($s)).ReadToEnd() } else { $_.Exception.Message } }
 ```
 
-In Windows PowerShell 5.1, `curl` is an alias for `Invoke-WebRequest`, so the bash form fails there. `setx` reaches only shells started afterwards, so open a new one first.
+Windows PowerShell 5.1 throws on a 401, 403 or 404, so the `catch` prints the status and the body. `blocked.md` matches on that body text. In 5.1, `curl` is an alias for `Invoke-WebRequest`, so the bash form fails there. `setx` reaches only shells started afterwards, so open a new one first.
 
 Done when all four hold. `blocked.md` covers the HTTP errors.
 
