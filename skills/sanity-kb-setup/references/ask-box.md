@@ -89,7 +89,7 @@ Model ids change often. Check the provider's model list. Gateways list theirs at
 
 ## The server route
 
-`app/api/ask/route.ts`. One question in, a streamed plain-text answer out.
+`app/api/ask/route.ts`. One question in, a streamed plain-text answer out, or a JSON error.
 
 ```ts
 import { createMCPClient } from "@ai-sdk/mcp";
@@ -122,38 +122,34 @@ function isRateLimited(ip: string) {
   return recent.length > REQUESTS_PER_MINUTE;
 }
 
-function fail(status: number, message: string) {
-  return new Response(message, { status, headers: { "Content-Type": "text/plain; charset=utf-8" } });
-}
-
 export async function POST(request: Request) {
   const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "local";
   if (isRateLimited(ip)) {
-    return fail(429, "Too many questions in a short time. Please wait a minute and try again.");
+    return Response.json({ error: "Too many questions in a short time. Please wait a minute and try again." }, { status: 429 });
   }
 
   let body: unknown;
   try {
     body = await request.json();
   } catch {
-    return fail(400, "Please send your question as JSON.");
+    return Response.json({ error: "Please send your question as JSON." }, { status: 400 });
   }
 
   const prompt = (body as { prompt?: unknown } | null)?.prompt;
   if (typeof prompt !== "string" || prompt.trim() === "") {
-    return fail(400, "Please type a question.");
+    return Response.json({ error: "Please type a question." }, { status: 400 });
   }
 
   const question = prompt.trim();
   if (question.length < 3 || question.length > MAX_QUESTION_LENGTH) {
-    return fail(400, `Please ask a question between 3 and ${MAX_QUESTION_LENGTH} characters.`);
+    return Response.json({ error: `Please ask a question between 3 and ${MAX_QUESTION_LENGTH} characters.` }, { status: 400 });
   }
 
   const token = process.env.SANITY_CONTEXT_TOKEN;
   const model = getAskModel();
   if (!token || !model) {
     console.error("Ask box: set the model provider's key and SANITY_CONTEXT_TOKEN");
-    return fail(503, "The assistant isn't set up yet.");
+    return Response.json({ error: "The assistant isn't set up yet." }, { status: 503 });
   }
 
   let mcpClient: Awaited<ReturnType<typeof createMCPClient>>;
@@ -164,7 +160,7 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     console.error("Ask box: could not connect to the Knowledge Base endpoint", error);
-    return fail(503, "The assistant isn't available right now.");
+    return Response.json({ error: "The assistant isn't available right now." }, { status: 503 });
   }
 
   const close = () => mcpClient.close().catch(() => {});
@@ -188,13 +184,15 @@ export async function POST(request: Request) {
   } catch (error) {
     close();
     console.error("Ask box: generation failed", error);
-    return fail(503, "The assistant isn't available right now.");
+    return Response.json({ error: "The assistant isn't available right now." }, { status: 503 });
   }
 }
 ```
 
 Why it is shaped this way:
-- **`prompt` in, plain text out.** `useCompletion` posts `{ prompt }`, reads a text stream with `streamProtocol: 'text'`, and turns a failed response's body into `error.message`. So every error is plain text written for a visitor, and each kind of bad request gets its own message.
+- **`prompt` in, text out, errors as JSON.** `useCompletion` posts `{ prompt }` and reads the answer as a text stream with `streamProtocol: 'text'`. Every error is `Response.json({ error: "..." }, { status })`, written for a visitor, with its own message for each kind of bad request.
+- **Each exit returns its response inline.** Don't wrap `Response.json` in a helper such as `fail()`, and don't build `new Response(...)` by hand for these.
+- **`useCompletion` puts the raw error body in `error.message`.** The component parses it and shows the `error` field. Without that, the visitor sees raw JSON.
 - **Rate limit.** The in-memory limiter is enough for a demo, but each server instance keeps its own count. For a live site, use the platform's rate limiting or a shared store, and set a spending limit on the provider key.
 - **`protocolVersionDiscovery: false`** skips a discovery probe and starts with `initialize`.
 - **The MCP client closes** when the stream ends, aborts or errors. Otherwise every question leaks a connection.
@@ -205,6 +203,7 @@ Why it is shaped this way:
 A client component placed as the last item of the FAQ list, under its own category heading such as "Other". Use `useCompletion`, not `useChat`, because there's no conversation to keep.
 
 It must look like the site's FAQ items. Copy the markup and classes of the FAQ item the site already renders, then swap the question text for an input:
+- **Block bad questions in the client too.** Use the same limits as the route, 3 to 300 characters after trimming. Set the input's `maxLength`, and keep the submit button disabled until the question is valid, so an empty or whitespace-only question never reaches the server. The route still checks, because anyone can call it directly.
 - **Question row.** A borderless input in the FAQ question's font and weight, with placeholder text such as "Can't find it? Type your own question here…". The row's height must match an FAQ row, so measure both.
 - **Toggle.** The FAQ item's own open/close icon becomes the submit button. A new question submits. The same question toggles the answer, like a FAQ item. Set `aria-expanded` and `aria-controls`, and label it "Ask", "Hide answer" or "Show answer".
 - **Answer panel.** Opens under the row with the FAQ answer's spacing and colour, and streams in. Render Markdown with `skipHtml`, inside an `aria-live="polite"` region.
@@ -219,6 +218,9 @@ import {useCompletion} from '@ai-sdk/react'
 import {useState} from 'react'
 import Markdown from 'react-markdown'
 
+const MIN_QUESTION_LENGTH = 3
+const MAX_QUESTION_LENGTH = 300
+
 export function AskQuestion({supportEmail}: {supportEmail: string}) {
   const [asked, setAsked] = useState('')
   const [open, setOpen] = useState(false)
@@ -228,9 +230,20 @@ export function AskQuestion({supportEmail}: {supportEmail: string}) {
   })
 
   const trimmed = input.trim()
-  const isNewQuestion = trimmed.length >= 3 && trimmed !== asked
+  const isValidQuestion =
+    trimmed.length >= MIN_QUESTION_LENGTH && trimmed.length <= MAX_QUESTION_LENGTH
+  const isNewQuestion = isValidQuestion && trimmed !== asked
   const hasAnswer = asked !== ''
   const expanded = open && hasAnswer
+
+  let errorMessage = ''
+  if (error) {
+    try {
+      errorMessage = JSON.parse(error.message).error
+    } catch {
+      errorMessage = 'Something went wrong. Please try again.'
+    }
+  }
 
   function onSubmit(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -245,7 +258,7 @@ export function AskQuestion({supportEmail}: {supportEmail: string}) {
   }
 
   // Render the site's FAQ item markup: a <form onSubmit={onSubmit}> row with the input
-  // and the icon button, then the answer panel showing `error.message`, a loading line
+  // and the icon button, then the answer panel showing `errorMessage`, a loading line
   // while `isLoading && !completion`, or <Markdown skipHtml>{completion}</Markdown>.
 }
 ```
