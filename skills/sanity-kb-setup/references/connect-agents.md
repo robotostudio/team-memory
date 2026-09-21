@@ -5,7 +5,7 @@ If the user only says "connect an agent", ask which kind they mean.
 | Kind | Do |
 |---|---|
 | A coding agent, such as Claude Code, Cursor or Codex, reading the Knowledge Base while they work | This file |
-| An agent inside their application, such as a support chatbot | Steps 1 to 3 so the endpoint works, then Sanity's guide at `https://www.sanity.io/docs/ai/sanity-context`. It needs an LLM provider and application code, which this skill doesn't build |
+| Visitors asking questions on their site, through a chatbot or an FAQ ask box | Steps 1 to 3 so the endpoint works, then stage 7, `visitor-chat.md` |
 
 ## The two values every agent needs
 
@@ -139,6 +139,10 @@ Ask two or three questions whose answers you know from the content. A good answe
 Include a question that names something only this project has, such as a product name. A right answer confirms the agent reads this Knowledge Base.
 
 To check a specific claim, ask "Is this text accurate: '<claim>'?". A Knowledge Base that is only Built or Reviewed gives unreliable verdicts. In testing it accepted a wrong promotion and doubted a correct cut-off time until the conflicts were resolved and the content fixed.
+
+## 6. Offer a visitor chat
+
+If the Knowledge Base is Clean, make the offer in `visitor-chat.md` now, once. Skip it if the user keeps conflicts on purpose, or already said no.
 
 ## Known limits of the answers
 

@@ -1,9 +1,9 @@
 ---
 name: sanity-kb-setup
-description: Set up, check and fix a Sanity Context Knowledge Base, then connect coding agents to it over MCP. Use when the user wants a Knowledge Base or "KB" planned, created or built, its conflicts or issues reviewed or resolved, its content corrected or audited, or an agent such as Claude Code, Cursor or Codex connected to one. Also use when they say "what did the build flag" or "pick the winners", or when setup is blocked by a missing Sanity project, login, organisation token or Knowledge Base slot.
+description: Set up, check and fix a Sanity Context Knowledge Base, connect coding agents to it over MCP, and guide building a visitor chat, a chatbot or an FAQ ask box, that answers from it. Use when the user wants a Knowledge Base or "KB" planned, created or built, its conflicts or issues reviewed or resolved, its content corrected or audited, or an agent such as Claude Code, Cursor or Codex connected to one, or visitors able to ask it questions through a chatbot or an FAQ ask box. Also use when they say "what did the build flag" or "pick the winners", or when setup is blocked by a missing Sanity project, login, organisation token or Knowledge Base slot.
 compatibility: Needs a Node version supported by the project's installed Sanity packages, a Sanity project with the `sanity` package installed, and `npx sanity login`. Tested with Sanity 6.14.0, which requires Node >=22.12.
 metadata:
-  version: "1.2.0"
+  version: "1.3.0"
 ---
 
 # Sanity Knowledge Base setup
@@ -22,9 +22,12 @@ Read only the file for the stage you are in.
 | 4. Resolve | The user replied with picks such as `1A 2B` | `references/resolve.md` and `references/api.md` |
 | 5. Fix content | Issues are resolved and the documents still hold the losing claims | `references/fix-content.md` |
 | 6. Connect | The user wants an agent to read the Knowledge Base | `references/connect-agents.md` |
+| 7. Visitor chat | The user said yes to the visitor chat offer | `references/visitor-chat.md` |
 | Blocked | A command fails, a result looks wrong, or something is missing | `references/blocked.md` |
 
 Stages 2 to 5 are one flow. A finished build sends you straight to stage 3. The stops are the ones marked in the stage files, where a person has to say yes or pick.
+
+Once the Knowledge Base is Clean, offer a visitor chat once, after stage 6 or in its place. `references/visitor-chat.md` has the wording and the conditions. Stage 7 writes application code, so it only starts on a yes.
 
 ## Where things stand
 
