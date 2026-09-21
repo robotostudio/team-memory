@@ -42,7 +42,7 @@ Each of these must hold. If one doesn't, tell the user and wait until it does.
 
 1. **The Knowledge Base is Clean.** Answers go to the public, so a silent settlement becomes a promise to a customer.
 2. **An MCP endpoint serves this Knowledge Base only.** Steps 1 to 3 of `connect-agents.md` create and confirm it. Use its full URL, written out.
-3. **The site has its own Context token.** Create it as in step 2 of `connect-agents.md`, named after the site, under a variable name the project doesn't already use. Store it where the site reads its environment: the local env file for development, and the hosting provider's settings for every deployed environment. A token in the developer's shell profile reaches a local dev server but never the deployed site.
+3. **The site has its own Context token.** The user creates it as in step 2 of `connect-agents.md`, named after the site, under a variable name the project doesn't already use. You pick the name and never see the value. The user stores it where the site reads its environment: an uncommitted local env file for development, and the hosting provider's settings for every deployed environment. A token in the developer's shell profile reaches a local dev server but never the deployed site.
 4. **You know the stack.** Read the project for the framework, any AI SDK or agent setup already in place, the LLM provider in use, and the names of its key variables. Read names only, never values. Adapt everything below to what you find.
 5. **The user has said where it lives.** An existing chat UI, a new UI, or a server endpoint only. Ask if it isn't clear, and build only the UI they asked for. For a new UI, match the components already on that page.
 
@@ -61,7 +61,7 @@ Walk the user through each point, and build it in their stack.
 
 ## Test it end to end
 
-Done when every check passes in the running app, both locally and on a deployed preview:
+Done when every check passes in the running app locally, and checks 1, 2, 3 and 5 pass again on a deployed preview:
 
 1. A question whose answer you know from the content gets that answer, and the model called the Knowledge Base tools to get it. Take two specific details from the answer, such as a number or a name, and find them in the entry with `knowledge_base_read`. A detail that isn't in any entry came from the model's own knowledge.
 2. A question the Knowledge Base doesn't cover gets "I don't know" and a pointer to where to ask.
