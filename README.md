@@ -42,3 +42,18 @@ the parser rejects them.
 4. Merge → entry is live in all bound project sessions.
 
 Use `/promote` in a Claude session to draft a promotion PR from a session lesson.
+
+## Skills
+
+Team skills live in `skills/` and are distributed as packs on skills.sh
+(`https://www.skills.sh/packs/roboto`), one pack per category.
+
+| Category | Skills |
+|---|---|
+| Workflow | `prep`, `ship-pr`, `foreman` |
+| Review | `pr-review-orchestrator` |
+| Frontend and SEO | `json-ld`, `ui-match` |
+| Sanity | `sanity-kb-setup`, `sanity-plugin-md-notes` |
+
+Adding a skill: put it in `skills/<name>/SKILL.md`, add it to the table above,
+then add it to the matching pack.
