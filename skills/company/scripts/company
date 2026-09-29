@@ -1,0 +1,1634 @@
+#!/bin/bash
+# company: the software-factory company's commands. `company help` lists them. Bash 3.2 (macOS /bin/bash).
+# State lives in $COMPANY_HOME: prompts/<m>.md (built), state/<m>/ (TAB CPANE SPANE ROLE MODEL EFFORT POOL TICKET TREE,
+# HUMAN from `company human`, HELD_BY (a job held outside the company until adopt), LABEL, and the watcher's BLOCKED DIALOG LIMIT QUIET ASKED WORKED TOLD ASLEEP SEQ),
+# queue/<m> (messages held for an awake member), queue/_company (wakes held at the cap), work/ (patches, claims,
+# reports), log (every wake), watch.pid (the watcher).
+set -uo pipefail
+
+SKILL=$(cd "$(dirname "$0")/.." && pwd)
+H=${COMPANY_HOME:-$HOME/roboto/software-factory-company}
+REPO=${COMPANY_REPO:-$HOME/roboto/software-factory}
+EXTRAS="kai lia max ada ben eli fay hal ines joe"
+export PATH="$SKILL/scripts:$HOME/.bun/bin:$PATH"
+mkdir -p "$H/prompts" "$H/queue" "$H/state" "$H/work" "$H/qa" "$H/tmp"
+
+die() { echo "company: $*" >&2; exit 1; }
+# field <file> <key>: a frontmatter value. body <file>: the file without its frontmatter.
+field() { awk -v k="$2" 'NR==1{if($0!="---")exit;next} $0=="---"{exit} {i=index($0,":"); if(substr($0,1,i-1)==k){v=substr($0,i+1); sub(/^[ \t]+/,"",v); print v; exit}}' "$1"; }
+body() { awk 'NR==1&&$0=="---"{f=1;next} f&&$0=="---"{f=0;next} !f' "$1"; }
+st() { cat "$H/state/$1/$2" 2>/dev/null; }
+role_of() { st "$1" ROLE || echo "$1"; }
+mfile() { echo "$SKILL/members/$(role_of "$1").md"; }
+is_on() { [ "$(field "$(mfile "$1")" "$2")" = yes ]; }
+awake() { herdr agent get "$1" >/dev/null 2>&1; }
+status() { local r; if r=$(herdr agent get "$1" 2>/dev/null); then jq -r '.result.agent.agent_status' <<<"$r"; else echo asleep; fi; }
+cap() { cat "$H/cap" 2>/dev/null || echo 8; }
+# models <model> <effort>: each empty or a value a member starts on.
+# ponytail: the ticket template's two models; add one here when the template does. claude-sonnet-5 is an older ticket's
+# Sonnet, run as claude-sonnet-5-5 (sonnet55).
+models() {
+  case ${1:-} in "" | claude-sonnet-5 | claude-sonnet-5-5 | claude-opus-5-5) ;; *) die "--model takes claude-sonnet-5-5 or claude-opus-5-5, not $1" ;; esac
+  case ${2:-} in "" | low | medium | high | xhigh | max) ;; *) die "--effort takes low, medium, high, xhigh or max, not $2" ;; esac
+}
+# sonnet55 <model>: Sonnet 5.5 replaced Sonnet 5 (the human, 2026-09-29); anything else as it is.
+sonnet55() { if [ "${1:-}" = claude-sonnet-5 ]; then echo claude-sonnet-5-5; else echo "${1:-}"; fi; }
+tree_path() { echo "$HOME/roboto/software-factory-$1"; }
+# kind_of <m>: the agent m runs on, claude unless its member file says codex or grok.
+# oncore <ticket>: its claim holds a file of the core (otto's and maya's list).
+oncore() {
+  grep -qE '^(packages/(core|protocol|store-sqlite|store-postgres|runner-docker|runner-sandbox|pool|backend-harness|vcs-github|secrets-connect)|apps/plant/src/(workflows|app/api))(/|$)' "$H/work/$1.touch" 2>/dev/null
+}
+# Wind-down (the human: at 50% of Claude's usage "stop taking new tasks, just complete the ones on hand"). The watcher
+# reads the login account's weekly usage (7d) off a member's status line; at the mark ($H/winddown-at,
+# default 50) it writes $H/WINDDOWN, and from then a ticket not on hand is held, not started. `company winddown off`.
+winding() { [ -f "$H/WINDDOWN" ]; }
+# onhand <ticket>: some member is on it or waits on it, or its work started (a tree saved, a report, a base).
+onhand() {
+  { [ -z "$1" ] || [ "$1" = - ]; } && return 0
+  local d f
+  for f in base patch report.md; do [ -e "$H/work/$1.$f" ] && return 0; done
+  for d in "$H"/state/*; do
+    [ "$(cat "$d/TICKET" 2>/dev/null)" = "$1" ] && return 0
+    awk -F'\t' -v t="$1" '$2 == t { f = 1 } END { exit !f }' "$d/WAITING" 2>/dev/null && return 0
+  done
+  return 1
+}
+# usage_pct: the highest 7d (the weekly limit, the human's call: not 5h) the awake Claude members on the login pool
+# show on their status lines (an idle member's line is minutes old, so the highest is the latest).
+usage_pct() {
+  local m
+  for m in $(ls "$H/state"); do
+    [ "$(st "$m" POOL)" = login ] && [ "$(kind_of "$m")" = claude ] && awake "$m" || continue
+    herdr pane read "$(st "$m" CPANE)" --source visible --lines 8 2>/dev/null | grep -oE '7d:[0-9]+%'
+  done | cut -d: -f2 | tr -d % | sort -n | tail -1 | grep .
+}
+# winddown_check: once a minute from the watcher; latches WINDDOWN at the mark and tells sam, anite and otto.
+winddown_check() {
+  local p mark m
+  winding && return 0
+  [ -n "$(find "$H/usage.at" -mmin -1 2>/dev/null)" ] && return 0
+  touch "$H/usage.at"
+  p=$(usage_pct) || return 0
+  echo "$p" > "$H/usage"
+  mark=$(cat "$H/winddown-at" 2>/dev/null || echo 50)
+  [ "$p" -ge "$mark" ] || return 0
+  echo "Claude's weekly usage at $p%, the mark is $mark%" > "$H/WINDDOWN"
+  echo "$(date -u +%FT%TZ) watch -> all - winding down: $(cat "$H/WINDDOWN"). Tickets on hand finish; nothing new starts" >> "$H/log"
+  ding stuck
+  for m in sam anite otto; do
+    (wake "$m" "The company is winding down: $(cat "$H/WINDDOWN") (the human's rule: stop taking new tasks, finish the ones on hand). Finish, review, land and QA what is on hand; hand out, start or hunt nothing new. company wake holds a new ticket until the human runs company winddown off.") >/dev/null 2>&1
+  done
+}
+winddown() {
+  case ${1:-} in
+    # off holds until a new mark: at 95% the old mark of 50 re-armed it 3 s after anite lifted it (2026-09-28).
+    off) rm -f "$H/WINDDOWN"; echo 100 > "$H/winddown-at"; echo "$(date -u +%FT%TZ) $(me) -> all - wind-down lifted" >> "$H/log"; drain; echo "wind-down lifted: held tickets start as slots free" ;;
+    [0-9]*) echo "$1" > "$H/winddown-at"; echo "the company winds down at $1% of Claude's usage" ;;
+    "") if winding; then echo "winding down: $(cat "$H/WINDDOWN")"; else echo "working; winds down at $(cat "$H/winddown-at" 2>/dev/null || echo 50)% of the weekly (7d) usage, now $(cat "$H/usage" 2>/dev/null || echo ?)%"; fi ;;
+    *) die "winddown [off | <percent>]" ;;
+  esac
+}
+kind_of() { local k; k=$(field "$(mfile "$1")" kind); echo "${k:-claude}"; }
+# nexting <m>: the watcher's _next is handing m its next message (a Codex /new and delivery take up to 80 s). A mark
+# 5 min old is a _next that died.
+nexting() { local f=$H/state/$1/NEXT; [ -f "$f" ] && [ $(($(date +%s) - $(cat "$f" 2>/dev/null || echo 0))) -lt 300 ]; }
+# fresh <m>: forget what the tab and the watcher knew of m's last session.
+fresh() {
+  # A question to the human outlives the ticket it came from: its tab keeps HUMAN NEEDED while the wait is open.
+  awk -F'\t' '$1 == "human" { f = 1 } END { exit !f }' "$H/state/$1/WAITING" 2>/dev/null || rm -f "$H/state/$1/HUMAN"
+  rm -f "$H/state/$1/"{SNOOZING,DONE,LABEL,BLOCKED,DIALOG,LIMIT,QUIET,ASKED,WORKED,TOLD,ASLEEP,SEQ}; }
+NATIVE=""
+QUIET_S=${COMPANY_QUIET_S:-180}
+STALE_S=${COMPANY_STALE_S:-900}
+ORPHAN_S=${COMPANY_ORPHAN_S:-1800}
+# Mirrors: helpers the watcher starts for a member whose held messages pile up (mirror()); their names, how many one
+# member gets, and how long one idles with nothing left before it snoozes.
+MIRRORS=${COMPANY_MIRRORS:-"vera gus ivy leo zoe nico"}
+MIRROR_MAX=${COMPANY_MIRROR_MAX:-2}
+MIRROR_IDLE_S=${COMPANY_MIRROR_IDLE_S:-600}
+
+# me: the member this runs as, from COMPANY_MEMBER or, for an adopted session, its herdr pane.
+me() {
+  if [ -n "${COMPANY_MEMBER:-}" ]; then echo "$COMPANY_MEMBER"; return; fi
+  local f
+  for f in "$H"/state/*/CPANE; do
+    [ -f "$f" ] && [ "$(cat "$f")" = "${HERDR_PANE_ID:-}" ] && { basename "$(dirname "$f")"; return; }
+  done
+  echo outside
+}
+
+# A short mkdir lock around the cap count, the queues and the claims. A lock held 60 s is a crashed holder's; each
+# holder leaves a token, so a holder whose lock was taken over never removes the new holder's.
+LOCKED=""
+lock() {
+  local i=0
+  until mkdir "$H/.lock" 2>/dev/null; do
+    i=$((i + 1)); [ "$i" -ge 600 ] && { rm -rf "$H/.lock"; i=0; }
+    sleep 0.1
+  done
+  LOCKED=$$.$RANDOM.$(date +%s); echo "$LOCKED" > "$H/.lock/token"
+}
+unlock() { if [ -n "$LOCKED" ]; then [ "$(cat "$H/.lock/token" 2>/dev/null)" = "$LOCKED" ] && rm -rf "$H/.lock"; LOCKED=""; fi; }
+trap unlock EXIT
+
+# count_working: members spending tokens now, working or starting; the cap counts these. An idle session costs nothing,
+# so a member waiting on a reply never holds a slot.
+# ponytail: a member just handed a message reads idle for a second, so a drain can overshoot the cap by one or two.
+count_working() {
+  local n=0 m s w
+  w=$(herdr agent list 2>/dev/null | jq -r '.result.agents[] | select(.agent_status == "working") | .name' 2>/dev/null)
+  for m in $(ls "$H/state"); do
+    s=$(st "$m" STARTING)
+    if grep -qx "$m" <<<"$w" || { [ -n "$s" ] && [ $(($(date +%s) - s)) -lt 300 ]; }; then n=$((n + 1)); fi
+  done
+  echo "$n"
+}
+
+# skill_file <name>: a skill's SKILL.md, from a plugin (plugin:skill) or from ~/.claude/skills.
+skill_file() {
+  local s=$1 f="" ip
+  case $s in
+    *:*)
+      ip=$(jq -r --arg p "${s%%:*}" '.plugins | to_entries[] | select(.key | startswith($p + "@")) | .value[0].installPath' \
+        "$HOME/.claude/plugins/installed_plugins.json" | head -1)
+      [ -n "$ip" ] && f=$(find "$ip/skills" -path "*/${s#*:}/SKILL.md" 2>/dev/null | head -1) ;;
+    *)
+      f=$HOME/.claude/skills/$s/SKILL.md
+      [ -f "$f" ] || f=$(ls "$HOME"/.claude/skills/synced/*/"$s"/SKILL.md 2>/dev/null | head -1) ;;
+  esac
+  [ -n "$f" ] && [ -f "$f" ] && echo "$f"
+}
+
+# build <member> [role]: prompts/<member>.md, the text `company start` appends to Claude's system prompt.
+build() {
+  local m=${1:?build <member> [role]} role=${2:-} f inc s sf out
+  [ -n "$role" ] || role=$(role_of "$m")
+  f=$SKILL/members/$role.md
+  [ -f "$f" ] || die "no member file for $role"
+  out=$H/prompts/$m.md
+  for s in $(field "$f" skills | tr ',' ' '); do skill_file "$s" >/dev/null || die "skill $s not found"; done
+  {
+    echo "# You are $m, the company's $(field "$f" job)"
+    [ "$m" != "$role" ] && echo "You are an extra $role: what the company's pages say of $role's job is yours, under your own name, $m."
+    echo
+    body "$f"
+    inc=$(field "$f" include)
+    if [ -n "$inc" ]; then echo; body "$SKILL/members/$inc.md"; fi
+    echo
+    cat "$SKILL/rules.md"
+    if [ -n "$(field "$f" skills)" ]; then
+      echo
+      echo "# Your skills, already loaded"
+      echo
+      echo "Each skill below is loaded in full. Follow it without loading it again with the Skill tool; load any other skill when it fits."
+      for s in $(field "$f" skills | tr ',' ' '); do
+        sf=$(skill_file "$s")
+        echo
+        echo "## Skill: $s"
+        echo
+        echo "Base directory for this skill: $(dirname "$sf")"
+        echo
+        body "$sf"
+      done
+    fi
+  } > "$out.tmp" && mv "$out.tmp" "$out"
+  echo "built $out: $(wc -c < "$out" | tr -d ' ') chars"
+}
+
+# label <m> [status]: m's tab name: its state and ticket, or "HUMAN NEEDED <minutes>m" first while it waits on the
+# human (HUMAN from `company human`, DIALOG from the watcher). Renamed only on a change.
+label() {
+  local m=$1 s=${2:-} tab t h f l
+  tab=$(st "$m" TAB) || return 0
+  [ -n "$s" ] || s=$(status "$m")
+  t=$(st "$m" TICKET)
+  f=$H/state/$m/HUMAN; h=$(st "$m" HUMAN)
+  if [ -z "$h" ] && [ -f "$H/state/$m/DIALOG" ]; then f=$H/state/$m/DIALOG; h="a dialog in this tab"; fi
+  if [ "$s" = asleep ]; then
+    l="$m · asleep"
+  elif [ -n "$h" ]; then
+    l="HUMAN NEEDED $((($(date +%s) - $(stat -f %m "$f")) / 60))m · $m · ${h:0:40}"
+  else
+    [ "$s" = done ] && s=idle
+    [ -f "$H/state/$m/LIMIT" ] && s="usage limit"
+    l="$m · $s${t:+ · $t}"
+  fi
+  [ "$l" = "$(st "$m" LABEL)" ] && return 0
+  herdr tab rename "$tab" "$l" >/dev/null 2>&1 && echo "$l" > "$H/state/$m/LABEL"
+}
+# peers <m>: the other awake members doing m's job (rex's are vera and gus; jon's are its extras).
+# is_free <m>: at its prompt with nothing on, nothing held and no `company done` pending.
+# has_ticket <m> <ROB-x>: m is on ROB-x, holds a message for it, or parked it on a wait (its reply is m's).
+peers() {
+  local r x w
+  r=$(role_of "$1"); w=$(herdr agent list 2>/dev/null | jq -r '.result.agents[].name' 2>/dev/null)
+  for x in $(ls "$H/state"); do [ "$x" != "$1" ] && [ "$(role_of "$x")" = "$r" ] && grep -qx "$x" <<<"$w" && echo "$x"; done
+}
+is_engineer() { [ "$(field "$(mfile "$1")" include)" = _engineer ]; }
+seq_of() { herdr agent list 2>/dev/null | jq -r --arg m "$1" '[.result.agents[] | select(.name == $m) | .state_change_seq // ""][0] // ""'; }
+is_free() {
+  [ -f "$H/state/$1/SNOOZING" ] || [ -s "$H/state/$1/OFF" ] && return 1
+  case $(status "$1") in idle | done) ;; *) return 1 ;; esac
+  [ ! -s "$H/state/$1/TICKET" ] && [ ! -s "$H/queue/$1" ] && [ ! -f "$H/state/$1/DONE" ]
+}
+# cat, not awk on both files: BSD awk exits 2 on a missing file, and a member with no WAITING never held its queue.
+has_ticket() { [ "$(st "$1" TICKET)" = "$2" ] || { cat "$H/queue/$1" "$H/state/$1/WAITING" 2>/dev/null || :; } | awk -F'\t' -v t="$2" '$2 == t { f = 1 } END { exit !f }'; }
+# unwait <m> <ROB-x>: a message for a ticket m parked on a wait, delivered or held for m, ends that wait. So does one for
+# the ticket the wait names: a wait is keyed by what m was on, and nora waited on maya's ok for ROB-4154 while on
+# ROB-4067, so maya's "ok ROB-4154" never ended it and the watcher chased her for it twice.
+unwait() {
+  local w=$H/state/$1/WAITING
+  if [ -n "${2:-}" ] && [ "$2" != - ] && [ -s "$w" ]; then
+    awk -F'\t' -v t="$2" '$2 != t && $5 !~ ("(^|[^-0-9A-Z])" t "([^0-9]|$)")' "$w" > "$w.tmp"; mv "$w.tmp" "$w"
+  fi
+}
+set_ticket() {
+  rm -f "$H/state/$1/DONE"; unwait "$1" "$2"
+  if [ -n "$2" ] && [ "$2" != - ] && ! is_on "$1" always; then echo "$2" > "$H/state/$1/TICKET"; fi
+  label "$1"
+}
+
+# ready <m> <pane>: wait until m's Claude is at its prompt. Answers the folder-trust dialog; stops at any other.
+# settle <pane>: a new shell can open on oh-my-zsh's "Would you like to update? [Y/n]", which eats the first command
+# typed into it (vera's first start never launched claude). C-c skips it unanswered: an answer is the human's, since it
+# updates oh-my-zsh or writes its postpone.
+settle() {
+  local i
+  for i in 1 2 3 4 5 6; do
+    if herdr pane read "$1" --source visible 2>/dev/null | grep -q 'Would you like to update?'; then
+      herdr pane send-keys "$1" C-c >/dev/null 2>&1; sleep 1; return 0
+    fi
+    sleep 0.5
+  done
+}
+ready() {
+  local m=$1 p=$2 i s scr
+  for i in $(seq 60); do
+    s=$(status "$m")
+    case $s in idle | done) return 0 ;; esac
+    scr=$(herdr pane read "$p" --source visible --lines 40 2>/dev/null)
+    if printf '%s' "$scr" | grep -qiE 'trust (this|the files in this) folder' && ! printf '%s' "$scr" | grep -qi 'bypass'; then
+      herdr pane send-keys "$p" Enter >/dev/null 2>&1
+    elif [ "$s" = blocked ]; then
+      printf '%s\n' "$scr" | tail -15 >&2
+      return 1
+    fi
+    sleep 2
+  done
+  return 1
+}
+
+ensure_tree() {
+  [ -d "$1" ] && return 0
+  git -C "$REPO" fetch -q origin && git -C "$REPO" worktree add -q --detach "$1" origin/main || die "could not create $1"
+}
+
+# start <m> [--as role] [--model M] [--effort E] [--pool login|token] [--nocap]: exit 3 at the cap.
+start() {
+  local m=${1:?start <member>}; shift
+  local role="" model="" effort="" pool="" nocap=""
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --as) role=$2; shift 2 ;;
+      --model) model=$2; shift 2 ;;
+      --effort) effort=$2; shift 2 ;;
+      --pool) pool=$2; shift 2 ;;
+      --nocap) nocap=1; shift ;;
+      *) die "start: unknown option $1" ;;
+    esac
+  done
+  models "$model" "$effort"; model=$(sonnet55 "$model")
+  case $m in [a-z]*) ;; *) die "a member's name is lowercase" ;; esac
+  if awake "$m"; then echo "$m is awake"; return 0; fi
+  # herdr can miss an agent in one read: a pane still running something is m, not a shell to start Claude in.
+  local r cp0; cp0=$(st "$m" CPANE)
+  if [ -n "$cp0" ] && r=$(herdr pane process-info --pane "$cp0" 2>/dev/null) &&
+    [ "$(jq -r '.result.process_info | .foreground_process_group_id != .shell_pid' <<<"$r" 2>/dev/null)" = true ]; then
+    echo "$m is awake: its pane runs something"; return 0
+  fi
+  # A member that failed to start is tried again 5 min later, not on every wake and poll (lena, 17:43 and 19:10).
+  if [ -f "$H/state/$m/DOWN" ] && [ $(($(date +%s) - $(stat -f %m "$H/state/$m/DOWN"))) -lt 300 ]; then
+    die "$m did not reach its prompt at $(date -r "$(stat -f %m "$H/state/$m/DOWN")" +%H:%M): its tab needs a look; anite knows"
+  fi
+  [ -s "$H/state/$m/HELD_BY" ] && die "$m is $(st "$m" HELD_BY) until the handover; company adopt makes it the company's"
+  [ -n "$role" ] || role=$(role_of "$m")
+  local f=$SKILL/members/$role.md
+  [ -f "$f" ] || die "no member file for $role (an extra starts with --as jon or --as rebecca)"
+  mkdir -p "$H/state/$m"
+  fresh "$m"
+  lock
+  if [ -z "$nocap" ] && [ "$(count_working)" -ge "$(cap)" ]; then unlock; return 3; fi
+  date +%s > "$H/state/$m/STARTING"
+  unlock
+  # A start that dies on the way (a tab, a split, a build) leaves no STARTING to hold a cap slot for 5 min.
+  trap "rm -f '$H/state/$m/STARTING'; unlock" EXIT
+  echo "$role" > "$H/state/$m/ROLE"
+  # Another name for a job that runs twice at once is a mirror, however it started, so it snoozes when idle.
+  [ "$role" != "$m" ] && [ "$(field "$f" mirror)" = yes ] && [ ! -s "$H/state/$m/MIRROR" ] && echo "$role" > "$H/state/$m/MIRROR"
+  [ -n "$model" ] || model=$(field "$f" model)
+  [ "$model" = ticket ] && model=claude-sonnet-5-5
+  [ -n "$effort" ] || effort=$(field "$f" effort)
+  [ "$effort" = ticket ] && effort=medium
+  if is_on "$m" rc; then pool=login; elif [ -z "$pool" ]; then pool=$(cat "$H/pool" 2>/dev/null || echo token); fi
+  local cwd=$REPO
+  if [ "$(field "$f" cwd)" = worktree ]; then cwd=$(tree_path "$m"); ensure_tree "$cwd"; fi
+  build "$m" "$role" >/dev/null
+  local cp sp r
+  cp=$(st "$m" CPANE); sp=$(st "$m" SPANE)
+  if [ -z "$cp" ] || ! herdr pane get "$cp" >/dev/null 2>&1 || ! herdr pane get "$sp" >/dev/null 2>&1; then
+    r=$(herdr tab create --workspace "${HERDR_WORKSPACE_ID:-w1}" --label "$m" --cwd "$cwd" --no-focus) || die "tab create: $r"
+    jq -r '.result.tab.tab_id' <<<"$r" > "$H/state/$m/TAB"
+    cp=$(jq -r '.result.root_pane.pane_id' <<<"$r")
+    r=$(herdr pane split "$cp" --direction down --cwd "$cwd" --no-focus) || die "pane split: $r"
+    sp=$(jq -r '.result.pane.pane_id' <<<"$r")
+    echo "$cp" > "$H/state/$m/CPANE"; echo "$sp" > "$H/state/$m/SPANE"
+    settle "$cp"; settle "$sp"
+    herdr pane run "$sp" "export COMPANY_MEMBER=$m COMPANY_HOME='$H' PATH='$SKILL/scripts:$HOME/.bun/bin':\$PATH; clear" >/dev/null
+  fi
+  # The pool: the token account's setup-token is sourced in this pane only, never on a command line.
+  local env="export COMPANY_MEMBER=$m COMPANY_SHELL=$sp COMPANY_HOME='$H' PATH='$SKILL/scripts:$HOME/.bun/bin':\$PATH"
+  if [ "$pool" = token ]; then env="$env; . '$SKILL/scripts/token-env.sh'"; else env="$env; unset CLAUDE_CODE_OAUTH_TOKEN"; fi
+  herdr pane run "$cp" "$env; cd '$cwd'; clear" >/dev/null
+  if [ "$(field "$f" kind)" = codex ]; then
+    # Codex takes no system prompt, name or Claude model: its first message carries the prompt (INTRO, see deliver),
+    # a ticket's Claude model is Codex's default, and Claude's max effort is Codex's xhigh.
+    local args=(--dangerously-bypass-approvals-and-sandbox) ce=$effort
+    case $model in gpt-* | o[0-9]* | codex-*) args+=(--model "$model") ;; esac
+    [ "$ce" = max ] && ce=xhigh
+    [ -n "$ce" ] && args+=(-c "model_reasoning_effort=$ce")
+    herdr agent start "$m" --kind codex --pane "$cp" --timeout 30000 -- "${args[@]}" >/dev/null 2>&1
+    touch "$H/state/$m/INTRO"
+  elif [ "$(field "$f" kind)" = grok ]; then
+    # Grok, like Codex: its first message carries the prompt, and a Claude model is Grok's default.
+    # ponytail: no --reasoning-effort (its values aren't known here), Grok's default; map effort once they are.
+    # --no-auto-update: the human's ~/.grok has auto_update on, and a launch would upgrade the host's grok.
+    local args=(--always-approve --no-auto-update)
+    case $model in grok-*) args+=(--model "$model") ;; esac
+    herdr agent start "$m" --kind grok --pane "$cp" --timeout 30000 -- "${args[@]}" >/dev/null 2>&1
+    touch "$H/state/$m/INTRO"
+  else
+    local args=(--name "$m" --model "$model" --effort "$effort" --dangerously-skip-permissions --chrome
+      --append-system-prompt-file "$H/prompts/$m.md")
+    local deny; deny=$(field "$f" deny)
+    [ -n "$deny" ] && args+=(--disallowedTools $(echo "$deny" | tr ',' ' '))
+    is_on "$m" rc && args+=(--remote-control "$m")
+    herdr agent start "$m" --kind claude --pane "$cp" --timeout 30000 -- "${args[@]}" >/dev/null 2>&1
+  fi
+  if ! ready "$m" "$cp"; then
+    rm -f "$H/state/$m/STARTING"
+    if [ ! -f "$H/state/$m/DOWN" ]; then
+      ding stuck; (stuck "$m" anite "did not reach its prompt when started: its tab needs a look, and wakes for it wait") >/dev/null 2>&1
+    fi
+    touch "$H/state/$m/DOWN"
+    die "$m did not reach its prompt: read its tab"
+  fi
+  rm -f "$H/state/$m/STARTING" "$H/state/$m/DOWN"; trap unlock EXIT
+  echo "$model" > "$H/state/$m/MODEL"; echo "$effort" > "$H/state/$m/EFFORT"; echo "$pool" > "$H/state/$m/POOL"
+  label "$m"
+  echo "started $m: $model $effort on the $pool pool"
+}
+
+# deliver <m> <text>: 0 delivered, 2 a dialog blocks m's prompt, 1 anything else.
+deliver() {
+  local r t=$2
+  [ -f "$H/state/$1/INTRO" ] && t="You are $1. Before anything else, read $H/prompts/$1.md in full: it is your job and the company's rules for this whole session. Then: $2"
+  if [ "$(kind_of "$1")" != claude ]; then
+    # Codex can drop a message typed while it's still settling (ROB-4092 sat in an empty composer): it counts once
+    # Codex leaves idle, and goes again once.
+    local i
+    for i in 1 2; do
+      r=$(herdr agent prompt "$1" "$t" 2>&1) || break
+      herdr agent wait "$1" --until working --until blocked --until done --timeout 20000 >/dev/null 2>&1 &&
+        { rm -f "$H/state/$1/INTRO"; return 0; }
+      r="$1 stayed idle after the message"
+    done
+  else
+    r=$(herdr agent prompt "$1" "$t" 2>&1) && { rm -f "$H/state/$1/INTRO"; return 0; }
+  fi
+  case $r in *agent_blocked*) return 2 ;; esac
+  echo "$r" >&2
+  return 1
+}
+# hold <queue> <m> <ticket> <model> <effort> <text> [<held since>]; pop <queue>: its oldest entry. The 6th field is when
+# it was first held, so the watcher can tell anite about a message that waits too long.
+hold() {
+  lock
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$2" "${3:--}" "${4:--}" "${5:--}" "$6" "${7:-$(date +%s)}" >> "$H/queue/$1"
+  unlock
+  [ "$1" = "$2" ] && unwait "$2" "$3"
+}
+pop() {
+  local q=$H/queue/$1 e t at l
+  lock
+  while [ -s "$q" ]; do
+    # First the oldest message of an urgent ticket (wake marks it), else the oldest.
+    local n; n=$(awk -F'\t' -v w="$H/work/" '{ if ((getline x < (w $2 ".urgent")) >= 0) { print NR; exit } } END { }' "$q")
+    e=$(sed -n "${n:-1}p" "$q"); sed "${n:-1}d" "$q" > "$q.tmp"; mv "$q.tmp" "$q"
+    # q66: a message held since before its ticket landed is spent (gus's ROB-4119 approval reached nora 100 min late,
+    # after she had landed it, and 5 landed tickets went round again). A message held after the landing (quinn's QA) goes.
+    IFS=$'\t' read -r _ t _ _ _ at <<<"$e"; l=$H/work/$t.landed
+    if [ -n "$at" ] && [ -f "$l" ] && [ "$at" -lt "$(stat -f %m "$l")" ]; then
+      echo "$(date -u +%FT%TZ) watch -> $1 $t - dropped: held since before $t landed ($(cat "$l"))" >> "$H/log"; continue
+    fi
+    printf '%s\n' "$e"; break
+  done
+  unlock
+}
+
+# route <m> <ticket|-> <model|-> <effort|-> <text>: deliver now, or hold; prints which.
+route() {
+  local m=$1 t=$2 model=$3 effort=$4 text=$5 cur rc
+  [ "$t" = - ] && t=""
+  [ "$model" = - ] && model=""
+  [ "$effort" = - ] && effort=""
+  # A job a session outside the company holds until its handover (maya: lane B until its "ok maya").
+  if [ -s "$H/state/$m/HELD_BY" ]; then echo "$m is $(st "$m" HELD_BY) until the handover: send it yourself with SendMessage to $(st "$m" HELD_BY)"; return 0; fi
+  # Off (company off: its vendor's usage ran out): held until company on.
+  if [ -s "$H/state/$m/OFF" ]; then hold "$m" "$m" "$t" "$model" "$effort" "$text" "${HELD_AT:-}"; echo "held for $m: it is off ($(st "$m" OFF)) until company on $m"; return 0; fi
+  if winding && [ -n "$t" ] && ! is_on "$m" always && ! onhand "$t"; then
+    hold _company "$m" "$t" "$model" "$effort" "$text" "${HELD_AT:-}"
+    echo "held: the company is winding down ($(cat "$H/WINDDOWN")); $t is not on hand and starts after company winddown off"
+    return 0
+  fi
+  # One ticket, one member a job: a message for a ticket another member of m's job is on goes to it (jon's two ROB-3998
+  # messages reached gus and vera). For a job that runs twice at once (mirror: yes), a message m can't take now, busy
+  # or asleep, goes to a free member of its job.
+  if [ -n "$t" ] && [ -z "${ROUTED:-}" ] && ! has_ticket "$m" "$t"; then
+    local x p="" hq=""
+    for x in $(peers "$m"); do
+      has_ticket "$x" "$t" || continue
+      # A free m takes a ticket a busy peer only holds in its queue, and the held rounds follow (sam's ROB-4110 for idle
+      # kai went back to busy jon, who then got it twice, 2026-09-28).
+      if is_engineer "$m" && is_free "$m" && [ "$(st "$x" TICKET)" != "$t" ] &&
+        ! awk -F'\t' -v t="$t" '$2 == t { f = 1 } END { exit !f }' "$H/state/$x/WAITING" 2>/dev/null; then hq=$x; continue; fi
+      p=$x; break
+    done
+    [ -z "$p" ] && [ -n "$hq" ] && (move "$hq" "$m" "$t") >/dev/null 2>&1
+    # Not a ticket m has worked (a round it sent on it): its next round waits for m, who knows it (ROB-4064's round 3,
+    # sent to gus while busy, went to rex, and both reviewed it). Engineers too: a new ticket for busy jon goes to a free
+    # extra (5 idle while jon's queue held 3, 2026-09-28).
+    if [ -z "$p" ] && { is_on "$m" mirror || is_engineer "$m"; } && { ! awake "$m" || [ -n "$(st "$m" TICKET)" ] || [ -s "$H/queue/$m" ]; } &&
+      ! grep -q "Z $m -> [^ ]* $t " "$H/log" 2>/dev/null; then
+      for x in $(peers "$m"); do is_free "$x" && { p=$x; break; }; done
+    fi
+    if [ -n "$p" ]; then
+      echo "$(date -u +%FT%TZ) $(me) -> $p $t [for $m] $text" >> "$H/log"
+      echo "for $m, to $p: $(has_ticket "$p" "$t" && echo "$p is on $t" || echo "$m is busy and $p is free")"
+      ROUTED=1 route "$p" "$t" "${model:--}" "${effort:--}" "$text [for $m: tell its sender $p has it]"
+      return
+    fi
+  fi
+  # A mirror on its way out: its session ends in a moment, and a message typed now would end with it.
+  # sam's ticket on another model or effort than an idle member runs: a fresh session on it, as _next does.
+  local rpool=""
+  if awake "$m" && [ -z "$(st "$m" TICKET)" ] && [ ! -s "$H/queue/$m" ] && ! is_on "$m" always &&
+    { { [ -n "$model" ] && [ "$model" != "$(st "$m" MODEL)" ]; } || { [ -n "$effort" ] && [ "$effort" != "$(st "$m" EFFORT)" ]; } ||
+      [ "$H/prompts/$m.md" -nt "$H/state/$m/POOL" ]; }; then
+    rpool=$(st "$m" POOL); stop_session "$m" >/dev/null || die "could not restart $m on $model $effort"
+  fi
+  if [ -f "$H/state/$m/SNOOZING" ]; then hold "$m" "$m" "$t" "$model" "$effort" "$text"; echo "held for $m: it is snoozing, and starts again for this"; return 0; fi
+  if awake "$m" && nexting "$m" && [ -z "${NEXTING:-}" ]; then
+    hold "$m" "$m" "$t" "$model" "$effort" "$text"; echo "held for $m: it is taking its next held message"; return 0
+  fi
+  if awake "$m"; then
+    cur=$(st "$m" TICKET)
+    if is_on "$m" always || [ -z "$t" ] || [ -z "$cur" ] || [ "$cur" = "$t" ]; then
+      if [ -n "$NATIVE" ]; then
+        # The watcher types it in if m shows no sign of it in 90 s: a sender that never sent it loses nothing.
+        printf '%s\t%s\t%s\n' "$(date +%s)" "$(seq_of "$m")" "$text" >> "$H/state/$m/EXPECT"
+        set_ticket "$m" "$t"; echo "$m is awake: send it yourself with SendMessage to $m"; return 0
+      fi
+      deliver "$m" "$text"; rc=$?
+      if [ $rc = 0 ]; then set_ticket "$m" "$t"; echo "delivered to $m"; return 0; fi
+      if [ $rc = 2 ]; then hold "$m" "$m" "$t" "$model" "$effort" "$text"; echo "held for $m: a dialog is open in its tab"; return 0; fi
+      die "could not reach $m"
+    fi
+    hold "$m" "$m" "$t" "$model" "$effort" "$text"
+    echo "held for $m: it is on $cur and gets this when it finishes"
+    return 0
+  fi
+  start "$m" ${rpool:+--pool "$rpool"} ${model:+--model "$model"} ${effort:+--effort "$effort"}; rc=$?
+  if [ $rc = 3 ]; then
+    hold _company "$m" "$t" "$model" "$effort" "$text"
+    echo "held: $(cap) members are working, the cap; $m starts when one finishes"
+    return 0
+  fi
+  [ $rc = 0 ] || die "could not start $m"
+  deliver "$m" "$text" || die "started $m but could not deliver the message"
+  set_ticket "$m" "$t"
+  echo "delivered to $m"
+}
+
+wake() {
+  local m=${1:?wake <member> \"<message>\"} msg=${2:?wake <member> \"<message>\"}; shift 2
+  local model="" effort="" from t
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --model) model=$2; shift 2 ;;
+      --effort) effort=$2; shift 2 ;;
+      *) die "wake: unknown option $1" ;;
+    esac
+  done
+  models "$model" "$effort"; model=$(sonnet55 "$model")
+  local flags=' --(model|effort) [^ ]+$'
+  [[ $msg =~ $flags ]] && die "the flags go after the message's closing quote: company wake $m \"<message>\" --model <id> --effort <level>"
+  [ -f "$(mfile "$m")" ] || die "no member $m (an extra starts first: company start <name> --as jon)"
+  from=$(me)
+  [ "$m" = "$from" ] && die "that's you"
+  msg=$(printf '%s' "$msg" | tr '\t\n' '  ')
+  t=$(printf '%s' "$msg" | grep -oE 'ROB-[0-9]+' | head -1)
+  # The human's "urgent", relayed by ted or anite, puts every held message of that ticket ahead of the line (pop):
+  # ROB-4279, a prod deploy blocker "land it urgently", sat 9th in nora's line behind routine approvals.
+  case $from in ted | anite) [ -n "$t" ] && grep -qi urgent <<<"$msg" && touch "$H/work/$t.urgent" ;; esac
+  # A ticket's model and effort, from sam's wake, hold for its engineer's later rounds.
+  if [ -n "$t" ] && [ "$(field "$(mfile "$m")" model)" = ticket ]; then
+    if [ -n "$model" ]; then echo "$model ${effort:--}" > "$H/work/$t.model"
+    elif [ -s "$H/work/$t.model" ]; then read -r model effort < "$H/work/$t.model"; [ "$effort" = - ] && effort=""; fi
+    # The core runs at high effort at least and Codex takes none; its model is sam's call per ticket (the human, 2026-09-29:
+    # no Opus unless absolutely necessary), so it keeps the one sam passed.
+    if [ "$(role_of "$m")" != rebecca ] && oncore "$t"; then
+      [ "$(kind_of "$m")" != claude ] && [ "$(me)" = sam ] && die "$t touches the core, which needs a Claude engineer: give it to jon, not $m"
+      [ -n "$model" ] || model=claude-sonnet-5-5; case $effort in "" | low | medium) effort=high ;; esac
+      echo "$model $effort" > "$H/work/$t.model"
+    fi
+  fi
+  # A Claude member's own call (CLAUDECODE) to an awake Claude member: the caller sends it with SendMessage. Scripts,
+  # codex and grok members get it typed.
+  if [ "${CLAUDECODE:-}" = 1 ] && [ -d "$H/state/$from" ] && [ "$(kind_of "$from")" = claude ] &&
+    [ "$(kind_of "$m")" = claude ]; then NATIVE=1; fi
+  # Logged once routed, with what went wrong: a wake that reached nobody never reads as a handoff.
+  local out rc
+  out=$(route "$m" "${t:--}" "${model:--}" "${effort:--}" "[from $from] $msg" 2>&1); rc=$?
+  echo "$(date -u +%FT%TZ) $from -> $m ${t:--} $msg$([ $rc = 0 ] || printf ' [not delivered: %s]' "$(tail -1 <<<"$out")")" >> "$H/log"
+  if [ $rc = 0 ]; then echo "$out"; else echo "$out" >&2; fi
+  return $rc
+}
+
+# stop_session <m>: /exit, then wait until the agent is gone.
+stop_session() {
+  local m=$1 i
+  if awake "$m"; then
+    herdr agent prompt "$m" "/exit" >/dev/null 2>&1
+    sleep 2
+    herdr agent send-keys "$m" enter >/dev/null 2>&1
+    for i in $(seq 60); do awake "$m" || break; sleep 1; done
+    if awake "$m"; then echo "company: $m did not exit: read its tab" >&2; return 1; fi
+  fi
+  rm -f "$H/state/$m/TICKET"
+  fresh "$m"
+  label "$m"
+}
+
+# drain: start held company wakes, oldest first, while a slot is free.
+drain() {
+  local e m t model effort text at out n
+  # One pass: a wake the wind-down holds again goes to the back, and is not tried twice.
+  n=$(grep -c . "$H/queue/_company" 2>/dev/null) || n=0
+  while [ "$n" -gt 0 ] && [ -s "$H/queue/_company" ] && [ "$(count_working)" -lt "$(cap)" ]; do
+    n=$((n - 1))
+    e=$(pop _company)
+    [ -n "$e" ] || break
+    IFS=$'\t' read -r m t model effort text at <<<"$e"
+    if ! out=$(HELD_AT=$at route "$m" "$t" "$model" "$effort" "$text"); then hold _company "$m" "$t" "$model" "$effort" "$text" "$at"; break; fi
+    echo "$out"; handed "$m" "$t" "$text" "$at" "$out"
+  done
+}
+
+done_() {
+  local m sp
+  m=$(me)
+  [ "$m" = outside ] && die "done runs inside a member's session"
+  rm -f "$H/state/$m/TICKET"
+  if is_on "$m" always; then label "$m"; echo "$m is always on: nothing more to do"; return 0; fi
+  # The watcher runs _next once this turn ends; m's shell stays free (it once ran there, refused m's next company run
+  # and cleared the run's end line off the screen: nora's ROB-4043 push).
+  touch "$H/state/$m/DONE"
+  echo "done: once this turn ends, the watcher hands you your next held message, or clears your context"
+}
+
+# wipe <m>: a fresh context between tickets: Claude's /clear, Codex's and Grok's /new, whose next message then carries the prompt.
+wipe() {
+  if [ "$(kind_of "$1")" != claude ]; then herdr agent prompt "$1" "/new" >/dev/null 2>&1 && touch "$H/state/$1/INTRO"
+  else herdr agent prompt "$1" "/clear" >/dev/null 2>&1; fi
+}
+# _next <m>: the watcher runs it after `company done`, once m's turn has ended.
+next_() {
+  local m=$1 e t model effort text at
+  e=$(pop "$m")
+  # Winding down: a ticket not on hand waits in the company's queue, and m takes the next one that is.
+  while [ -n "$e" ] && winding; do
+    IFS=$'\t' read -r _ t model effort text at <<<"$e"
+    onhand "$t" && break
+    hold _company "$m" "$t" "$model" "$effort" "$text" "$at"
+    e=$(pop "$m")
+  done
+  # Nothing held: m stays open and idle, which costs no tokens, its context cleared for the next wake.
+  if [ -z "$e" ]; then
+    rm -f "$H/state/$m/TICKET"; fresh "$m"
+    [ "$(field "$(mfile "$m")" reset)" = clear ] && wipe "$m"
+    label "$m"
+    echo "$m is idle, its context cleared: the next wake reaches it at once"
+    drain
+    return 0
+  fi
+  IFS=$'\t' read -r _ t model effort text at <<<"$e"
+  [ "$t" = - ] && t=""
+  [ "$model" = - ] && model=""
+  [ "$effort" = - ] && effort=""
+  # A new model or effort, or a prompt rebuilt since m started (POOL is start's last write): a fresh session.
+  if { [ -n "$model" ] && [ "$model" != "$(st "$m" MODEL)" ]; } || { [ -n "$effort" ] && [ "$effort" != "$(st "$m" EFFORT)" ]; } ||
+    [ "$H/prompts/$m.md" -nt "$H/state/$m/POOL" ]; then
+    stop_session "$m" || return 1
+    start "$m" --nocap --pool "$(st "$m" POOL)" ${model:+--model "$model"} ${effort:+--effort "$effort"} || return 1
+  elif [ "$(field "$(mfile "$m")" reset)" = clear ]; then
+    wipe "$m"
+    sleep 2
+    herdr agent wait "$m" --until idle --until done --timeout 60000 >/dev/null 2>&1
+  fi
+  deliver "$m" "$text" || return 1
+  set_ticket "$m" "$t"
+  handed "$m" "$t" "$text" "$at"
+  echo "$m is on ${t:-its next message}"
+}
+
+# off <m> "<why>": m stays down (Codex out of usage, 2026-09-28): its session ends (its tab closes if it won't exit),
+# wakes for it are held, the watcher never starts it. on <m>: back; the watcher starts it for what's held.
+off() {
+  local m=${1:?off <member> \"<why>\"} why=${2:?off <member> \"<why>\"}
+  mkdir -p "$H/state/$m"; echo "$why" > "$H/state/$m/OFF"
+  stop_session "$m" 2>/dev/null || { herdr tab close "$(st "$m" TAB)" >/dev/null 2>&1; rm -f "$H/state/$m/TICKET"; fresh "$m"; }
+  echo "$m is off: $why; wakes for it are held until company on $m"
+}
+on() { rm -f "$H/state/${1:?on <member>}/OFF"; echo "$1 is on: the watcher starts it for what's held"; }
+
+stop() {
+  local m=${1:?stop <member>}
+  stop_session "$m" && echo "$m is asleep"
+  drain
+}
+
+board() {
+  local m s t q f
+  for m in $(ls "$H/state"); do
+    for f in HUMAN DIALOG; do
+      [ -f "$H/state/$m/$f" ] || continue
+      q=$(st "$m" HUMAN); [ "$f" = DIALOG ] && q="a dialog in its tab"
+      echo "HUMAN NEEDED since $(date -r "$(stat -f %m "$H/state/$m/$f")" +%H:%M): $m: $q"
+    done
+  done
+  echo "cap $(cap), working $(count_working)"
+  for m in $(ls "$H/state"); do
+    s=$(status "$m"); t=$(st "$m" TICKET)
+    q=$(cut -f2 "$H/queue/$m" 2>/dev/null | tr '\n' ' ')
+    printf '%-8s %-8s %-9s %s %s, %s%s\n' "$m" "$s" "${t:--}" "$(st "$m" MODEL)" "$(st "$m" EFFORT)" "$(st "$m" POOL)" "${q:+  next: $q}"
+  done
+  if [ -s "$H/queue/_company" ]; then
+    echo "held at the cap, oldest first:"
+    cut -f1,5 "$H/queue/_company" | sed 's/^/  → /'
+  fi
+  for f in "$H"/work/*.touch; do [ -f "$f" ] && echo "claim $(basename "$f" .touch): $(tr '\n' ' ' < "$f")"; done
+  return 0
+}
+
+# dash [--live]: the company at a glance: who needs the human, each ticket in play with who's on it, who gave it to
+# them and the hands it passed through, the rest of the team, who's down, what's held. --live redraws it every 5 s: the
+# watch tab's right pane, beside the watcher's feed of handoffs.
+dash() {
+  local c f
+  if [ "${1:-}" = --live ]; then
+    printf '\033[?25l'; trap 'printf "\033[?25h"; exit 0' INT TERM
+    while :; do autowatch; c=$(tput cols 2>/dev/null); f=$(DASH_W=$c dash); printf '\033[H\033[2J%s' "$f"; sleep 5; done
+  fi
+  local now w sts m s x t g q on hands rank n B D R G Y Z; now=$(date +%s)
+  w=${DASH_W:-$(tput cols 2>/dev/null || echo 80)}; [ "$w" -gt 20 ] 2>/dev/null || w=80
+  B=$'\033[1m' D=$'\033[2m' R=$'\033[31m' G=$'\033[32m' Y=$'\033[33m' Z=$'\033[0m'
+  sts=$(herdr agent list 2>/dev/null | jq -r '.result.agents[] | "\(.name) \(.agent_status)"' 2>/dev/null)
+  state() { awk -v m="$1" '$1 == m { print $2; f = 1 } END { if (!f) print "asleep" }' <<<"$sts"; }
+  waits() { [ -f "$H/state/$1/HUMAN" ] || [ -f "$H/state/$1/DIALOG" ]; }
+  # who: a member's dot, name and state word; red while it waits on the human.
+  who() {
+    local s; s=$(state "$1")
+    if waits "$1"; then printf '%s● %-8s%-9s%s' "$R" "$1" "needs you" "$Z"
+    else case $s in
+      working) printf '%s●%s %-8s%-9s' "$G" "$Z" "$1" "$s" ;;
+      blocked) printf '%s● %-8s%-9s%s' "$R" "$1" "$s" "$Z" ;;
+      *) printf '%s○%s %-8s%s%-9s%s' "$D" "$Z" "$1" "$D" "$s" "$Z" ;;
+    esac; fi
+  }
+  {
+    n=0 x=0; for m in $(ls "$H/state"); do s=$(state "$m"); [ "$s" = asleep ] || n=$((n + 1)); [ "$s" = working ] && x=$((x + 1)); done
+    # main is origin/main: nora pushes from her tree, and nobody pulls a checkout's local main (anite read it: 7ae9597e).
+    local mn ld; mn=$(git -C "$REPO" rev-parse --short origin/main 2>/dev/null)
+    ld=$(find "$H/work" -name '*.landed' -newermt "$(date +%Y-%m-%d)" 2>/dev/null | grep -c .)
+    printf '%sthe company%s  %s%s · %s working of %s · %s open · main %s · %s landed today%s\n' "$B" "$Z" "$D" "$(date +%H:%M)" "$x" "$(cap)" "$n" "${mn:-?}" "$ld" "$Z"
+
+    printf '\n%sNeeds you%s\n' "$B" "$Z"; q=""
+    for m in $(ls "$H/state"); do
+      for f in HUMAN DIALOG; do
+        [ -f "$H/state/$m/$f" ] || continue
+        x=$(st "$m" HUMAN); [ "$f" = DIALOG ] && x="a dialog is open in its tab"
+        q=1; printf '  %s● %-7s%s %s%3sm%s  %s\n' "$R" "$m" "$Z" "$D" "$(((now - $(stat -f %m "$H/state/$m/$f")) / 60))" "$Z" "$x"
+      done
+    done
+    [ -n "$q" ] || printf '  %snobody%s\n' "$D" "$Z"
+
+    # Tickets in play, the ones waiting on the human first, then worked, then idle, then only queued, then nobody's.
+    printf '\n%sWork%s\n' "$B" "$Z"
+    for x in $(cat "$H"/state/*/TICKET 2>/dev/null; ls "$H"/work/*.touch 2>/dev/null | sed 's|.*/||; s|\.touch$||'); do
+      [[ $x =~ ^ROB-[0-9]+$ ]] || continue
+      on=$(grep -lx "$x" "$H"/state/*/TICKET 2>/dev/null | sed "s|$H/state/||; s|/TICKET||")
+      rank=4
+      for m in $on; do
+        s=$(state "$m"); if waits "$m"; then rank=0; elif [ "$s" = working ]; then [ $rank -gt 1 ] && rank=1; else [ $rank -gt 2 ] && rank=2; fi
+      done
+      [ -z "$on" ] && awk -F'\t' -v x="$x" '$2 == x { f = 1 } END { exit !f }' "$H"/queue/* 2>/dev/null && rank=3
+      echo "$rank $x"
+    done | sort -u | sort -n -k1,1 -k2,2 | while read -r rank x; do
+      on=$(grep -lx "$x" "$H"/state/*/TICKET 2>/dev/null | sed "s|$H/state/||; s|/TICKET||")
+      f=""; [ -f "$H/work/$x.touch" ] && n=$(grep -c . "$H/work/$x.touch"); f="$n file"; [ "$n" = 1 ] || f="${f}s"
+      [ -f "$H/work/$x.landed" ] && f="${f:+$f · }landed $(cat "$H/work/$x.landed")"
+      f=$D$f$Z
+      t=$x
+      if [ -n "$on" ]; then
+        for m in $on; do
+          g=$(awk -v m="$m" -v x="$x" '$3 == "->" && $4 == m && $5 == x && $2 != "watch" { r = $2 } END { print r }' "$H/log" 2>/dev/null)
+          printf '  %-8s  %s %s%-13s%s %s\n' "$t" "$(who "$m")" "$D" "${g:+from $g}" "$Z" "$f"; t=""; f=""
+        done
+      else
+        q=$(awk -F'\t' -v x="$x" '$2 == x { print $1 }' "$H"/queue/* 2>/dev/null | sort -u | tr '\n' ' ')
+        if [ -n "$q" ]; then printf '  %-8s  %s○ %-8s%-9s%-13s%s %s\n' "$t" "$D" "${q% }" queued "" "$Z" "$f"
+        else printf '  %-8s  %s  %-30s%s %s\n' "$t" "$D" "nobody on it" "$Z" "$f"; fi
+      fi
+      # The last 5 hands it passed through, the watcher's nudges left out.
+      hands=$(awk -v x="$x" '$3 == "->" && $5 == x && $2 != "watch" && $4 != "watch" {
+          if ($2 != l) h[++n] = $2; h[++n] = $4; l = $4 }
+        END { for (i = (n > 5 ? n - 4 : 1); i <= n; i++) c = c (c ? " → " : "") h[i]; print (n > 5 ? "… " : "") c }' "$H/log" 2>/dev/null)
+      [ -n "$hands" ] && printf '            %s%s%s\n' "$D" "$hands" "$Z"
+    done
+
+    printf '\n%sTeam%s  %snot on a ticket%s\n' "$B" "$Z" "$D" "$Z"; q=""
+    for m in $(ls "$H/state"); do
+      [ -s "$H/state/$m/TICKET" ] && continue
+      if [ "$(state "$m")" = asleep ]; then q="$q $m"; continue; fi
+      printf '  %s %s%s%s%s\n' "$(who "$m")" "$D" "$(field "$(mfile "$m")" job 2>/dev/null)" "$( [ -s "$H/state/$m/MIRROR" ] && echo " · mirror of $(st "$m" MIRROR)")" "$Z"
+    done
+    [ -n "$q" ] && printf '  %snot started  %s%s\n' "$D" "${q# }" "$Z"
+
+    q=""
+    for m in $(ls "$H/state"); do
+      f=$H/state/$m
+      [ -f "$f/DOWN" ] && q="$q  ${Y}▲ $(printf '%-7s' "$m")$Z did not start at $(date -r "$(stat -f %m "$f/DOWN")" +%H:%M): its tab needs a look"$'\n'
+      [ -f "$f/LIMIT" ] && q="$q  ${Y}▲ $(printf '%-7s' "$m")$Z usage limit, back at the reset"$'\n'
+      [ -f "$f/TOLD" ] && q="$q  ${Y}▲ $(printf '%-7s' "$m")$Z quiet since $(date -r "$(cat "$f/QUIET")" +%H:%M), never answered"$'\n'
+      [ -f "$f/ASKED" ] && [ ! -f "$f/TOLD" ] && q="$q  ${Y}▲ $(printf '%-7s' "$m")$Z quiet, the watcher asked at $(date -r "$(cat "$f/ASKED")" +%H:%M)"$'\n'
+    done
+    [ -n "$q" ] && printf '\n%sDown%s\n%s' "$B" "$Z" "$q"
+
+    # Every held message: for whom, from whom, how long, and what holds it (the cap, or the member's current work).
+    q=$(for f in "$H"/queue/*; do [ -s "$f" ] && awk -F'\t' -v q="${f##*/}" -v now="$now" '{ f = $5; sub(/^\[from /, "", f)
+        w = f; sub(/\].*/, "", w); sub(/^[^]]*\] /, "", f); sub("^" w ": ", "", f); sub("^" $2 ":? ", "", f)
+        printf "%s\t%s\t%s\t%s\t%s\n", $1, w, ($6 ? int((now - $6) / 60) "m" : "?"), (q == "_company" ? "cap" : "busy"), ($2 == "-" ? "" : $2 " ") f }' "$f"; done)
+    if [ -n "$q" ]; then
+      printf '\n%sHeld%s  %sfor whom, from whom, how long, held by the cap or its current work%s\n' "$B" "$Z" "$D" "$Z"
+      while IFS=$'\t' read -r m f t x g; do
+        case $t in [0-9]*m) [ "${t%m}" -ge $((STALE_S / 60)) ] && t="$Y$t$Z" ;; esac
+        printf '  %-7s ← %-6s %4s  %-4s %s%s%s\n' "$m" "$f" "$t" "$x" "$D" "$g" "$Z"
+      done <<<"$q"
+    fi
+  } | fit "$w"
+}
+# fit <cols>: cuts each line to <cols> visible characters, colours not counted.
+fit() {
+  perl -CSD -e 'my $w = shift; while (<STDIN>) { chomp; my @p = split /(\e\[[0-9;?]*[a-zA-Z])/; my ($o, $n) = ("", 0);
+    my $len = 0; $len += length for grep { !/^\e/ } @p;
+    if ($len > $w) { for my $p (@p) { if ($p =~ /^\e/) { $o .= $p; next }
+        if ($n + length($p) > $w - 1) { $o .= substr($p, 0, $w - 1 - $n) . "\x{2026}"; last } $o .= $p; $n += length $p } }
+    else { $o = $_ } print "$o\e[0m\n" }' "$1"
+}
+# feed: the watch tab's left pane, the log as it streams: each handoff as a header (local time, what kind it is in a
+# coloured column, from → to, the ticket) over its message, cut to 2 lines of the pane; a blank line between them. The
+# kind comes from the message's first telling words; a question for the human is red and bold, the watcher's nudges are dim.
+feed() {
+  perl -CSD -e '
+    use utf8; $| = 1;
+    my ($off) = @ARGV; $off =~ /^([+-])(\d\d)(\d\d)$/; $off = ($1 eq "-" ? -1 : 1) * ($2 * 60 + $3);
+    my ($D, $B, $Z) = ("\e[2m", "\e[1m", "\e[0m");
+    my %C = (red => "\e[31m", grn => "\e[32m", yel => "\e[33m", blu => "\e[34m", mag => "\e[35m", cyn => "\e[36m", dim => $D);
+    my @kinds = ([qr/\blanded\b/i, "landed", "grn"], [qr/human answered/i, "answered", "grn"],
+      [qr/ready for review/i, "review", "blu"], [qr/round \d+ fixed|\bfixed:/i, "fixed", "blu"],
+      [qr/\d+ findings?\b/i, "findings", "yel"], [qr/\bapproved\b/i, "approved", "grn"], [qr/\bpassed\b|\bgreen\b/i, "passed", "grn"],
+      [qr/^bug\b|bug found/i, "bug", "mag"], [qr/\bblocked\b/i, "blocked", "red"],
+      [qr/ready-for-agent/i, "ready", "cyn"], [qr/needs-info|question/i, "question", "yel"], [qr/\bok\?/, "wants ok", "yel"]);
+    sub width { return $ENV{FEED_W} if $ENV{FEED_W}; my (undef, $w) = split " ", `stty size </dev/tty 2>/dev/null`; $w && $w > 30 ? $w : 80 }
+    sub wrap { my ($t, $w, $n) = @_; my @l = (""); for my $word (split / +/, $t) {
+        if (length($l[-1]) + length($word) + 1 > $w && length $l[-1]) { push @l, "" } $l[-1] .= (length $l[-1] ? " " : "") . $word }
+      if (@l > $n) { @l = @l[0 .. $n - 1]; $l[-1] = substr($l[-1], 0, $w - 1) . "…" } map { substr($_, 0, $w) } @l }
+    while (<STDIN>) {
+      chomp; my ($ts, $from, $arrow, $to, $x, $text) = split / /, $_, 6;
+      next unless ($arrow // "") eq "->" && $ts =~ /T(\d\d):(\d\d)/; $text //= "";
+      my $t = ($1 * 60 + $2 + $off + 1440) % 1440;
+      my ($kind, $col) = ("", "dim");
+      if ($to eq "human") { ($kind, $col) = ("asks you", "red") }
+      elsif ($from eq "watch" && $text =~ /a mirror of|snoozed/) { ($kind, $col) = ("helper", "cyn") }
+      elsif ($from eq "watch") { ($kind, $col) = ("nudge", "dim") }
+      else { my $at = 1e9; for (@kinds) { if ($text =~ $_->[0] && $-[0] < $at) { $at = $-[0]; ($kind, $col) = ($_->[1], $_->[2]) } } }
+      $x = "" if $x eq "-";
+      $text =~ s/^\Q$x\E:?\s+// if $x; $text =~ s/^\Q$from\E:\s+//; $text =~ s/^\Q$x\E:?\s+// if $x;
+      $text =~ s/^(ready for review|bug)\s*:\s*//i; $text =~ s/\s*Report, message and patch in \S+\.?//;
+      my $w = width(); my $dim = $from eq "watch" ? $D : "";
+      my $k = $kind eq "asks you" ? "$B$C{red}" : $C{$col};
+      printf "\n%s%02d:%02d%s  %s%-9s%s %s%s%s → %s%s%s  %s%s%s\n", $D, $t / 60, $t % 60, $Z, $k, $kind, $Z,
+        $dim || $B, $from, $Z, $dim || $B, $to, $Z, $D, $x, $Z;
+      my $m = $kind eq "asks you" ? $B : $dim;
+      print "       $m$_$Z\n" for wrap($text, $w - 8, 2);
+    }' "$(date +%z)"
+}
+
+names() { local n; for n in $EXTRAS; do awake "$n" || echo "$n"; done; }
+
+# overlaps <a> <b>: the same file, or one is a folder (ending in /) that holds the other.
+overlaps() {
+  case $1 in */) case $2 in "$1"*) return 0 ;; esac ;; esac
+  case $2 in */) case $1 in "$2"*) return 0 ;; esac ;; esac
+  [ "$1" = "$2" ]
+}
+
+# claim <ROB-x> <path>...: hold paths for a ticket until it lands. Fails, holding nothing, when an unlanded ticket
+# holds an overlapping path.
+claim() {
+  local t=${1:?claim ROB-<n> <path>...}; shift
+  [ $# -gt 0 ] || die "claim $t <path>..."
+  local p q f other
+  lock
+  for p in "$@"; do
+    p=${p#./}
+    for f in "$H"/work/*.touch; do
+      [ -f "$f" ] || continue
+      other=$(basename "$f" .touch)
+      [ "$other" = "$t" ] && continue
+      while read -r q; do
+        if [ -n "$q" ] && overlaps "$p" "$q"; then
+          unlock
+          # It waits on that ticket: not an orphan meanwhile, and told when it lands (orphans).
+          printf '%s\t%s\n' "$other" "$(me)" >> "$H/work/$t.after"; sort -u -o "$H/work/$t.after" "$H/work/$t.after"
+          echo "$t waits: $p overlaps $q, held by $other until $other lands; you hear when it does"
+          return 1
+        fi
+      done < "$f"
+    done
+  done
+  for p in "$@"; do echo "${p#./}"; done >> "$H/work/$t.touch"
+  sort -u -o "$H/work/$t.touch" "$H/work/$t.touch"
+  # ponytail: any claim that holds ends the wait, even one for other paths; a later refused claim records it again.
+  rm -f "$H/work/$t.after"
+  unlock
+  echo "claimed for $t: $*"
+}
+release() { rm -f "$H/work/${1:?release ROB-<n>}.touch"; echo "released $1"; }
+
+# patch_of <dir>: the tree's whole change against HEAD, new files included, as a binary patch with no renames.
+patch_of() {
+  local idx=$H/tmp/index.$$
+  rm -f "$idx"
+  (cd "$1" && GIT_INDEX_FILE=$idx git read-tree HEAD && GIT_INDEX_FILE=$idx git add -A &&
+    GIT_INDEX_FILE=$idx git diff --cached --binary --no-renames HEAD)
+  local rc=$?
+  rm -f "$idx"
+  return $rc
+}
+files_of() { awk '/^diff --git /{p=$4; sub(/^b\//,"",p); print p}' "$1"; }
+# outside <ROB-x> <patch>: the patch's files that the ticket's claim doesn't hold.
+outside() {
+  local f c ok
+  for f in $(files_of "$2"); do
+    ok=""
+    while read -r c; do [ -n "$c" ] && overlaps "$f" "$c" && ok=1; done < "$H/work/$1.touch"
+    [ -n "$ok" ] || echo "$f"
+  done
+}
+
+# tree start: a tree may be reset only while it holds nothing unsaved, that is, while it equals state/<m>/tree.patch,
+# the work it last started with or saved. A scratch tree (rex's) never holds work of its own and is always reset.
+tree_start() {
+  local t=${1:?tree start ROB-<n>} m p last now prev
+  m=$(me); p=$(tree_path "$m")
+  [[ $t =~ ^ROB-[0-9]+$|^main$ ]] || die "tree start ROB-<n> | main"
+  ensure_tree "$p"
+  git -C "$p" fetch -q origin || die "fetch failed"
+  last=$H/state/$m/tree.patch
+  if [ "$(field "$(mfile "$m")" tree)" != scratch ] && [ -n "$(git -C "$p" status --porcelain)" ]; then
+    now=$H/tmp/now.$$.patch
+    patch_of "$p" > "$now"
+    if [ ! -f "$last" ] || ! cmp -s "$now" "$last"; then
+      rm -f "$now"
+      prev=$(st "$m" TREE)
+      die "your tree holds work nobody saved${prev:+ (it was on $prev)}: run company tree save ${prev:-ROB-<n>} first"
+    fi
+    rm -f "$now"
+  fi
+  git -C "$p" reset -q --hard origin/main && git -C "$p" clean -fdq || die "could not reset $p"
+  rm -f "$last"
+  local note=""
+  if [ -s "$H/work/$t.patch" ]; then
+    if ! git -C "$p" apply --3way --whitespace=nowarn "$H/work/$t.patch"; then
+      git -C "$p" reset -q --hard origin/main && git -C "$p" clean -fdq
+      die "$t's saved work conflicts with origin/main $(git -C "$p" rev-parse --short HEAD); your tree is back on main and work/$t.patch is untouched: tell sam"
+    fi
+    git -C "$p" reset -q
+    patch_of "$p" > "$last"
+    note=", with $t's saved work ($(files_of "$last" | wc -l | tr -d ' ') files)"
+  fi
+  local lk; lk=$(git -C "$p" hash-object bun.lock)
+  if [ ! -d "$p/node_modules" ] || [ "$(st "$m" INSTALLED)" != "$lk" ]; then
+    (cd "$p" && bun install --frozen-lockfile) >/dev/null 2>&1 || die "bun install failed in $p: run it in your shell to see why"
+    echo "$lk" > "$H/state/$m/INSTALLED"
+  fi
+  echo "$t" > "$H/state/$m/TREE"
+  echo "tree $p on origin/main $(git -C "$p" rev-parse --short HEAD)$note"
+}
+
+tree_save() {
+  local t=${1:?tree save ROB-<n>} m p out
+  m=$(me); p=$(tree_path "$m")
+  [[ $t =~ ^ROB-[0-9]+$ ]] || die "tree save ROB-<n>"
+  [ -d "$p" ] || die "no tree at $p"
+  patch_of "$p" > "$H/work/$t.patch.tmp" || die "could not build the patch"
+  mv "$H/work/$t.patch.tmp" "$H/work/$t.patch"
+  cp "$H/work/$t.patch" "$H/state/$m/tree.patch"
+  git -C "$p" rev-parse HEAD > "$H/work/$t.base"
+  echo "$t" > "$H/state/$m/TREE"
+  echo "saved $t: $(files_of "$H/work/$t.patch" | wc -l | tr -d ' ') files on $(git -C "$p" rev-parse --short HEAD)"
+  files_of "$H/work/$t.patch" | sed 's/^/  /'
+  if [ -f "$H/work/$t.touch" ]; then
+    out=$(outside "$t" "$H/work/$t.patch")
+    [ -z "$out" ] || { echo "outside $t's claim (claim them, or undo them):"; echo "$out" | sed 's/^/  /'; }
+    # nora's check's refusals, now, not after review (6 approved tickets bounced on churn and escapes, 2026-09-28).
+    bash "$SKILL/scripts/land.sh" gate "$t" "$p" 2>&1 | tail -1
+  else
+    echo "$t has no claim: company claim $t <path>..."
+  fi
+}
+
+tree() {
+  case ${1:-} in
+    start) tree_start "${2:-}" ;;
+    save) tree_save "${2:-}" ;;
+    *) tree_path "${1:-$(me)}" ;;
+  esac
+}
+
+check() {
+  local s=$SECONDS rc
+  lock.sh bun run check
+  rc=$?
+  echo "check exit=$rc in $((SECONDS - s))s"
+  return $rc
+}
+
+# run '<command>': runs it in the member's shell pane, where the human watches, in a subshell that starts in the
+# member's tree (the repo for a member without one), and waits for it. The end line carries a fresh fixed-width id,
+# so no earlier output and no typed command line can match it. Prints the last 200 lines and exits with the command's
+# code; after 9 minutes (under the Bash tool's 10) it says so and exits 124, and `company wait` waits again.
+shell_pane() {
+  local sp=${COMPANY_SHELL:-}
+  [ -n "$sp" ] || sp=$(st "$(me)" SPANE)
+  [ -n "$sp" ] || die "no shell pane: this runs inside a member's session"
+  echo "$sp"
+}
+run_() {
+  local cmd=${1:?run '<command>'} m sp id r d=$REPO
+  m=$(me); sp=$(shell_pane) || exit 1
+  r=$(herdr pane process-info --pane "$sp") || die "could not reach your shell"
+  [ "$(jq -r '.result.process_info | .foreground_process_group_id == .shell_pid' <<<"$r")" = true ] ||
+    die "your shell is still running something: company wait"
+  [ "$(field "$(mfile "$m")" cwd)" = worktree ] && d=$(tree_path "$m")
+  id=$(date +%s)$(printf %05d "$RANDOM")
+  mkdir -p "$H/state/$m" && echo "$id" > "$H/state/$m/RUN"
+  herdr pane run "$sp" "clear; (cd '$d' || exit; $cmd); echo \"run exit=\$? $id\"" >/dev/null ||
+    die "could not reach your shell"
+  wait_ "$id"
+}
+wait_() {
+  local id=${1:-} sp out rc
+  [ -n "$id" ] || id=$(st "$(me)" RUN)
+  [ -n "$id" ] || die "no run to wait for"
+  sp=$(shell_pane) || exit 1
+  # Every 10 s: the end line, or the shell back at its prompt without one (the line was cleared off the screen): the run
+  # is over either way, so a wait never outlives its run.
+  local end=$((SECONDS + 540)) r
+  until herdr pane wait-output "$sp" --regex "run exit=[0-9]+ $id" --timeout 10000 >/dev/null 2>&1; do
+    r=$(herdr pane process-info --pane "$sp" 2>/dev/null)
+    if [ "$(jq -r '.result.process_info | .foreground_process_group_id == .shell_pid' <<<"$r" 2>/dev/null)" = true ] &&
+      ! herdr pane wait-output "$sp" --regex "run exit=[0-9]+ $id" --timeout 1000 >/dev/null 2>&1; then
+      echo "the run ended, but its end line is gone from your shell: its exit is unknown. Read its log or run it again"
+      return 125
+    fi
+    [ "$SECONDS" -lt "$end" ] || { echo "still running after 9 minutes: company wait"; return 124; }
+  done
+  out=$(herdr pane read "$sp" --source recent-unwrapped --lines 200)
+  # The lines between the typed command (it holds the id and a quote) and the end line. The end line is matched anywhere
+  # in a line: output padded to the pane's width (bun run check's shards) soft-wraps it onto the line before (ROB-4043's
+  # check ended green in 92 s and rex waited 18 min).
+  printf '%s\n' "$out" | awk -v id="$id" 'index($0, id "\"") {b = ""; next}
+    match($0, "run exit=[0-9]+ " id) {printf "%s%s", b, substr($0, 1, RSTART - 1); exit} {b = b $0 "\n"}'
+  rc=$(printf '%s\n' "$out" | sed -n "s/.*run exit=\([0-9][0-9]*\) $id.*/\1/p" | tail -1)
+  echo "run exit=${rc:-?}"
+  return "${rc:-1}"
+}
+
+# ding <sound>: plays $H/sounds/<sound>.mp3 on this Mac in the background. From sounds.sh, the
+# workers speak Warcraft peon: ready = warcraft-ready-to-work (boot), human = csgo-bomb-planted (a member waits on the
+# human), answered = warcraft-work-work (the human answered; it works on), landed = gta-mission-passed, stuck =
+# roblox-oof (a member is down: a usage limit, or quiet with no answer).
+# There is no mute: the human wants every sound (a mute file once silenced them for an afternoon unasked).
+ding() {
+  (afplay "$H/sounds/$1.mp3" </dev/null >/dev/null 2>&1; echo "$(date -u +%FT%TZ) $1 exit=$? by $(me)" >> "$H/dings.log") </dev/null >/dev/null 2>&1 &
+}
+
+# waiting <member|human> "<what>": you wait on a teammate's reply, or the human's. It parks your ticket: you're free for
+# your next held message at once (quinn sat 2 h on ROB-4058 with ROB-4043's check held behind it), and the reply, which
+# carries the ticket's id, reaches you whatever you're on then. The watcher checks the member you wait on has your
+# message: one that is free without it, or any after 30 min, is told, and anite too.
+waiting_() {
+  local m who=${1:?waiting <member|human> \"<what you wait for>\"} what=${2:-} t
+  m=$(me); [ -d "$H/state/$m" ] || die "waiting runs inside a member's session"
+  [ "$who" = human ] || [ -f "$(mfile "$who")" ] || die "no member $who"
+  t=$(st "$m" TICKET)
+  printf '%s\t%s\t%s\t0\t%s\n' "$who" "${t:--}" "$(date +%s)" "$(printf '%s' "$what" | tr '\t\n' '  ')" >> "$H/state/$m/WAITING"
+  rm -f "$H/state/$m/TICKET"; label "$m"
+  # A wait on the human is an ask of the human: the tab reads HUMAN NEEDED and the sound plays, as company human does.
+  [ "$who" = human ] && human_ "${t:+$t: }$what"
+  echo "${t:-this} is parked on $who. End your turn: your next held message comes next, or you stay idle until the reply"
+}
+# human "<what>" | human off: your tab reads "HUMAN NEEDED <minutes>m · <you> · <what>" until `company human off`.
+human_() {
+  local m what=${1:?human \"<what you need from the human>\" | human off} f
+  m=$(me); f=$H/state/$m/HUMAN
+  [ -d "$H/state/$m" ] || die "human runs inside a member's session"
+  if [ "$what" = off ]; then [ -f "$f" ] && ding answered; rm -f "$f"; label "$m"; echo "your tab no longer says HUMAN NEEDED"; return 0; fi
+  what=$(printf '%s' "$what" | tr '\t\n' '  ')
+  # A new ask keeps the clock of the one before: the minutes are how long the human has been needed.
+  if [ -f "$f" ]; then printf '%s' "$what" > "$f.tmp"; touch -r "$f" "$f.tmp"; mv "$f.tmp" "$f"; else printf '%s' "$what" > "$f"; fi
+  echo "$(date -u +%FT%TZ) $m -> human - $what" >> "$H/log"
+  label "$m"
+  ding human
+  echo "your tab reads HUMAN NEEDED until you run: company human off"
+}
+
+# desk: who hears that something is stuck: anite; ted when anite is down (asleep, a usage limit, a dialog); the human,
+# by the HUMAN NEEDED sound and a line in the feed, when both are. tell_desk "<what>" tells it.
+desk() {
+  local x
+  for x in anite ted; do
+    awake "$x" && [ ! -f "$H/state/$x/LIMIT" ] && [ "$(status "$x")" != blocked ] && { echo "$x"; return; }
+  done
+  echo human
+}
+tell_desk() {
+  local d; d=$(desk)
+  if [ "$d" = human ]; then echo "$(date -u +%FT%TZ) watch -> human - anite and ted are down: $1" >> "$H/log"; ding human
+  else (wake "$d" "$1") >/dev/null 2>&1; fi
+}
+# stuck <m> <to> <what>: tell <to> (ted or anite when m is <to>) and, when awake, the member who last gave m work.
+stuck() {
+  local m=$1 to=$2 what=$3 t r
+  if [ "$m" = "$to" ]; then if [ "$to" = anite ]; then to=ted; else to=anite; fi; fi
+  t=$(st "$m" TICKET)
+  what="$m${t:+ (on $t)} $what"
+  if [ "$to" = anite ]; then tell_desk "$what."; else (wake "$to" "$what.") >/dev/null 2>&1; fi
+  r=$(awk -v m="$m" '$3 == "->" && $4 == m && $2 != "watch" && $2 != "outside" {r = $2} END {print r}' "$H/log" 2>/dev/null)
+  if [ -n "$r" ] && [ "$r" != "$to" ] && [ "$r" != "$m" ] && awake "$r"; then (wake "$r" "$what; $to knows.") >/dev/null 2>&1; fi
+}
+
+# rebuild: a member's prompt older than rules.md or its member file is built again. An always-on member (never restarted)
+# is told to re-read it; any other gets it with its next fresh session (route and _next restart on a newer prompt).
+rebuild() {
+  local m p
+  for m in $(ls "$H/state"); do
+    p=$H/prompts/$m.md; [ -f "$p" ] || continue
+    [ "$SKILL/rules.md" -nt "$p" ] || [ "$(mfile "$m")" -nt "$p" ] || continue
+    build "$m" >/dev/null 2>&1 || continue
+    is_on "$m" always && awake "$m" &&
+      deliver "$m" "[from watch] The company's rules changed: re-read $p, the prompt your session started from, and follow it from now on." >/dev/null 2>&1
+  done
+}
+# watch_route <m>: route m's oldest held message again.
+# move <from> <to> [<n>|ROB-x]: hands <to> the newest n (default half, at least 1) of the messages held for <from>, or
+# every one for ROB-x, each with the other messages held for its ticket: one ticket, one reviewer (jon's two ROB-3998
+# messages once went to gus and vera). Each goes to <to> as route sends a wake: delivered, or held for it.
+move() {
+  local a=${1:?move <from> <to> [<n>|ROB-x]} b=${2:?move <from> <to> [<n>|ROB-x]} n=${3:-} q e t model effort text at k note
+  q=$H/queue/$a; [ -s "$q" ] || die "nothing held for $a"
+  [ -f "$(mfile "$b")" ] || die "no member $b"
+  lock
+  k=$(grep -c . "$q")
+  if [[ $n =~ ^ROB-[0-9]+$ ]]; then t=$n n=0; else t=""; [ -n "$n" ] || n=$(((k + 1) / 2)); fi
+  local mvf; mvf=$(mktemp "$H/tmp/move.XXXXXX")
+  awk -F'\t' -v k="$k" -v n="$n" -v t="$t" -v mv="$mvf" -v keep="$q.tmp" '
+    NR == FNR { if (FNR > k - n && $2 != "-") T[$2] = 1; if ($2 == t) T[$2] = 1; next }
+    FNR > k - n || ($2 in T) { print > mv; next } { print > keep }' "$q" "$q"
+  touch "$q.tmp"; mv "$q.tmp" "$q"
+  unlock
+  n=$(grep -c . "$mvf")
+  while IFS=$'\t' read -r _ t model effort text at; do
+    # To itself: its held message joins the ticket it is on now, not a move (nora read "[moved from nora]").
+    if [ "$a" = "$b" ]; then
+      echo "$(date -u +%FT%TZ) $(me) -> $b $t - handed $b its held message for $t, the ticket it is on" >> "$H/log"
+      route "$b" "$t" "$model" "$effort" "$text" | sed 's/^/  /'; continue
+    fi
+    echo "$(date -u +%FT%TZ) $(me) -> $b $t [moved from $a] $text" >> "$H/log"
+    note=""; is_engineer "$b" && [ -s "$H/work/$t.patch" ] && note=" Its tree is saved: company tree start $t restores it."
+    route "$b" "$t" "$model" "$effort" "$text [moved from $a]$note" | sed 's/^/  /'
+  done < "$mvf"
+  rm -f "$mvf"; echo "moved $n of $a's $k held to $b"
+}
+# stale: a message held longer than STALE_S (15 min) goes to anite once, whose job is that nobody stays blocked: who
+# it's for, from whom, how long, and what holds it up (the member's ticket, or the cap).
+# orphans: a claimed ticket, not landed, that nobody is on, holds or waits for, with no handoff in 30 min (ROB-4063 blocked
+# and ROB-3980 idle since the night before, and nobody said): sam hears once; an hour on, the human: anite's tab reads
+# HUMAN NEEDED and the sound plays.
+orphans() {
+  local f x ts last o now new="" late="" y w; now=$(date +%s)
+  # A ticket whose claim was refused for another's (work/x.after: that ticket, and who asked): once all of them landed,
+  # the one who asked hears it can claim again (ROB-4129, 4194, 4252 waited on ROB-4303 and nobody said when it landed).
+  for f in "$H"/work/*.after; do
+    [ -f "$f" ] || continue
+    x=$(basename "$f" .after); w=""
+    while IFS=$'\t' read -r y o; do [ -f "$H/work/$y.landed" ] || w=1; done < "$f"
+    [ -n "$w" ] && continue
+    for o in $(cut -f2 "$f" | sort -u); do
+      (wake "$o" "$x: $(cut -f1 "$f" | sort -u | tr '\n' ' ')landed, so $x waits on nothing now: claim what it needs and go on.") >/dev/null 2>&1
+    done
+    rm -f "$f"
+  done
+  for f in "$H"/work/*.touch; do
+    [ -f "$f" ] || continue
+    x=$(basename "$f" .touch); o=$H/work/$x.orphan
+    [ -f "$H/work/$x.after" ] && { rm -f "$o"; continue; }
+    if [ -f "$H/work/$x.landed" ] || grep -qx "$x" "$H"/state/*/TICKET 2>/dev/null ||
+      awk -F'\t' -v x="$x" '$2 == x { f = 1 } END { exit !f }' "$H"/queue/* 2>/dev/null ||
+      awk -F'\t' -v x="$x" '$2 == x && $1 != "stalled" { f = 1 } END { exit !f }' "$H"/state/*/WAITING 2>/dev/null; then
+      rm -f "$o"; continue
+    fi
+    # Its last handoff: a member's word on it, or the watcher's "waits on nothing now" (ROB-4357 went to sam as an orphan 16 s after).
+    local to; read -r ts to <<< "$(awk -v x="$x" '$3 == "->" && $5 == x && ($2 != "watch" || /waits on nothing now/) { t = $1; if ($2 == "nora" || $4 == "nora") w = $4 }
+      END { print t, w }' "$H/log" 2>/dev/null)"
+    # Its last word with nora was to nora, and nora is awake: in the landing line, approved and waiting its turn behind the
+    # check (ROB-4188 went to sam as an orphan while main was red; ROB-4205 reached the human after a side note to anite).
+    # nora bounced it back, or nora is asleep: an orphan again.
+    last=$(date -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$ts" +%s 2>/dev/null || stat -f %m "$f")
+    # ponytail: trusts nora to keep its own line, for 4 h: ROB-4352, approved and checked, fell out of it and sat 7.5 h, and
+    # held ROB-4194 and the dogfooding retry behind it. Past the ceiling it is an orphan again.
+    if [ "$to" = nora ] && awake nora && [ $((now - last)) -lt 14400 ]; then rm -f "$o"; continue; fi
+    # A claim made after that handoff starts its 30 min at the claim (an old handoff made a fresh claim an orphan at once).
+    [ "$(stat -f %m "$f")" -gt "$last" ] && last=$(stat -f %m "$f")
+    [ -f "$o" ] && [ "$last" -gt "$(stat -f %m "$o")" ] && rm -f "$o"
+    [ $((now - last)) -ge "$ORPHAN_S" ] || { rm -f "$o"; continue; }
+    if [ ! -f "$o" ]; then echo sam > "$o"; new="$new $x (since $(date -r "$last" +%H:%M))"
+    elif [ "$(cat "$o")" = sam ] && [ $((now - $(stat -f %m "$o"))) -ge 3600 ]; then echo human > "$o"; late="$late $x"; fi
+  done
+  [ -n "$new" ] && (wake sam "Claimed with nobody on them, nothing held or waited on, no handoff in 30 min:$new. Give each to someone, or release its claim (company release ROB-x) with a word on Linear. The human hears in 1 h.") >/dev/null 2>&1
+  if [ -n "$late" ]; then
+    local h=$H/state/anite/HUMAN
+    [ -f "$h" ] || printf 'claimed, nobody on them for 90 min:%s' "$late" > "$h"
+    label anite
+    echo "$(date -u +%FT%TZ) watch -> human - claimed, nobody on them for 90 min, sam told an hour ago:$late" >> "$H/log"
+    ding human
+    (wake anite "The human is told: claimed, nobody on them for 90 min, sam told an hour ago:$late. Ask the human what to do with each, then company human off.") >/dev/null 2>&1
+  fi
+}
+# said: when m last handed something on (its last "m -> …" line in the log), in epoch seconds; 0 if never.
+said() {
+  local ts; ts=$(awk -v m="$1" '$2 == m && $3 == "->" { t = $1 } END { print t }' "$H/log" 2>/dev/null)
+  date -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$ts" +%s 2>/dev/null || echo 0
+}
+stale() {
+  local q m t text at from why k now; now=$(date +%s)
+  for q in "$H"/queue/*; do
+    [ -s "$q" ] || continue
+    [ "${q##*/}" = _company ] && winding && continue
+    if awk -F'\t' 'NF < 6 || $6 == "" { f = 1 } END { exit !f }' "$q"; then
+      lock; awk -F'\t' -v OFS='\t' -v n="$now" '{ if (NF < 6 || $6 == "") $6 = n; print }' "$q" > "$q.tmp" && mv "$q.tmp" "$q"; unlock
+    fi
+    while IFS=$'\t' read -r m t _ _ text at; do
+      [ -n "$at" ] || continue
+      # Moved to a peer earlier in this pass (move rewrites the queue under this read).
+      awk -F'\t' -v t="$t" -v at="$at" '$2 == t && $6 == at { f = 1 } END { exit !f }' "$q" || continue
+      # Its ticket landed since it was held: spent (q66), dropped when m takes its next, not chased (ROB-4218's approval
+      # nagged anite 15 min after it landed).
+      [ "$t" != - ] && [ -f "$H/work/$t.landed" ] && [ "$at" -lt "$(stat -f %m "$H/work/$t.landed")" ] && continue
+      # An engineer's message held 10 min goes to a free peer (jon's extras) itself; sam hears only when none is free.
+      if [ "${q##*/}" != _company ] && [ $((now - at)) -ge 600 ] && is_engineer "$m" && [ ! -f "$H/state/$m/LATE-$at" ]; then
+        local x p=""; for x in $(peers "$m"); do is_free "$x" && { p=$x; break; }; done
+        if [ -n "$p" ]; then (move "$m" "$p" "$t") >/dev/null 2>&1; continue; fi
+        touch "$H/state/$m/LATE-$at"
+        [ -s "$H/work/$t.patch" ] && (wake sam "$t: its next round has waited $(((now - at) / 60)) min for $m, who is on $(st "$m" TICKET). Its tree is saved in work/$t.patch: an extra can take it (company tree start $t restores it).") >/dev/null 2>&1
+      fi
+      [ $((now - at)) -ge "$STALE_S" ] || continue
+      k=$H/state/$m/STALE-$at; [ -f "$k" ] && continue
+      # A queue that drains isn't blocked: m handed something on in the last STALE_S (12 of 20 nags on 2026-09-28 were
+      # nora landing her approvals one by one, 6 in 20 min). The nag comes once m goes quiet.
+      [ "${q##*/}" != _company ] && [ $((now - $(said "$m"))) -lt "$STALE_S" ] && continue
+      touch "$k"
+      from=${text#\[from }; from=${from%%]*}; [ "$t" = - ] && t=""
+      if [ "${q##*/}" = _company ]; then why="the cap: $(count_working) of $(cap) are working"
+      else why="$m is $(status "$m")$( [ -s "$H/state/$m/TICKET" ] && echo " on $(st "$m" TICKET)")"; fi
+      tell_desk "Held $(((now - at) / 60)) min: $from's message for $m${t:+ ($t)} waits on $why. Get it moving: a word to $m, or tell $from."
+    done < "$q"
+  done
+}
+# mirror: nobody's pile grows, for a job that runs twice at once (mirror: yes). A message held for one member goes to
+# another member of its job already on its ticket, or to a free one, newest first; a member with more than 2 held and
+# nobody free gets a mirror, a helper of its job under a new name from MIRRORS (at most MIRROR_MAX a member). A mirror
+# left with nothing snoozes after MIRROR_IDLE_S (watch_one). $H/no-mirrors turns this off.
+mirror() {
+  local q m k x n t free f
+  [ -e "$H/no-mirrors" ] && return 0
+  for q in "$H"/queue/*; do
+    m=${q##*/}; [ "$m" = _company ] && continue
+    [ -s "$q" ] || continue
+    # Only a job that can run twice at once: one nora lands in one tree, one quinn drives one Chrome.
+    is_on "$m" mirror || continue
+    for x in $(peers "$m"); do
+      t=$(st "$x" TICKET); [ -n "$t" ] && [ -s "$q" ] || continue
+      awk -F'\t' -v t="$t" '$2 == t { f = 1 } END { exit !f }' "$q" && (move "$m" "$x" "$t") >/dev/null 2>&1
+    done
+    [ -s "$q" ] || continue
+    free=""; for x in $(peers "$m"); do is_free "$x" && { free=$x; break; }; done
+    if [ -n "$free" ]; then (move "$m" "$free" 1) >/dev/null 2>&1; continue; fi
+    [ -s "$H/state/$m/MIRROR" ] && continue
+    k=$(grep -c . "$q"); [ "$k" -gt 2 ] || continue
+    n=$(grep -lx "$m" "$H"/state/*/MIRROR 2>/dev/null | wc -l | tr -d ' ')
+    [ "$n" -lt "$MIRROR_MAX" ] || continue
+    # A mirror that failed to start (a dialog, the cap) is tried again 5 min later, not every poll.
+    f=$H/state/$m/MIRROR_FAILED
+    [ -f "$f" ] && [ $(($(date +%s) - $(stat -f %m "$f"))) -lt 300 ] && continue
+    for x in $MIRRORS; do [ -s "$H/state/$x/MIRROR" ] || awake "$x" || { free=$x; break; }; done
+    [ -n "$free" ] || continue
+    # A new mirror starts in the background (its start takes a minute); MIRROR first, so the next poll counts it.
+    mkdir -p "$H/state/$free"; echo "$m" > "$H/state/$free/MIRROR"
+    ( if (start "$free" --as "$(role_of "$m")"); then
+        echo "$(date -u +%FT%TZ) watch -> $free - a mirror of $m, which has $k held" >> "$H/log"
+        rm -f "$H/state/$m/MIRROR_FAILED"; move "$m" "$free" 1
+      else rm -f "$H/state/$free/MIRROR"; touch "$H/state/$m/MIRROR_FAILED"; fi ) >/dev/null 2>&1 &
+  done
+}
+watch_route() {
+  local e t model effort text at out
+  e=$(pop "$1"); [ -n "$e" ] || return 0
+  IFS=$'\t' read -r _ t model effort text at <<<"$e"
+  if out=$(route "$1" "$t" "$model" "$effort" "$text" 2>/dev/null); then handed "$1" "$t" "$text" "$at" "$out"
+  else hold "$1" "$1" "$t" "$model" "$effort" "$text" "$at"; fi
+}
+# handed <m> <ticket> <text> <held since> [route's output]: the log's line for a held message that reached m at last.
+handed() {
+  case ${5:-delivered} in *"for $1, to "*) return 0 ;; *delivered* | *"send it yourself"*) ;; *) return 0 ;; esac
+  local from=${3#\[from }; from=${from%%]*}
+  echo "$(date -u +%FT%TZ) watch -> $1 ${2:--} - handed $1 $from's message${4:+, held $((($(date +%s) - $4) / 60)) min}" >> "$H/log"
+}
+
+# watch_one <m> <status> [seq]: one member, one poll. seq is herdr's state_change_seq for m.
+watch_one() {
+  local m=$1 s=$2 q=${3:-} d=$H/state/$1 now
+  [ -f "$d/TAB" ] || return 0
+  now=$(date +%s)
+  if [ "$s" = asleep ]; then
+    rm -f "$d/"{BLOCKED,DIALOG,LIMIT,QUIET,ASKED,WORKED,TOLD,SEQ}
+    # Left by itself (not through `company done`) with messages still held for it: start it for the oldest.
+    if [ -s "$H/queue/$m" ] && [ ! -s "$d/OFF" ] && { [ ! -f "$d/STARTING" ] || [ $((now - $(cat "$d/STARTING"))) -ge 300 ]; }; then
+      [ -f "$d/ASLEEP" ] || echo "$now" > "$d/ASLEEP"
+      [ $((now - $(cat "$d/ASLEEP"))) -ge 30 ] && { rm -f "$d/ASLEEP"; watch_route "$m"; }
+    fi
+    # Ended mid-ticket, not through `company done` or stop (both clear TICKET), with nothing held: started again for it.
+    if [ -s "$d/TICKET" ] && [ ! -s "$H/queue/$m" ] && [ ! -f "$d/SNOOZING" ] &&
+      { [ ! -f "$d/STARTING" ] || [ $((now - $(cat "$d/STARTING"))) -ge 300 ]; }; then
+      [ -f "$d/ASLEEP" ] || echo "$now" > "$d/ASLEEP"
+      if [ $((now - $(cat "$d/ASLEEP"))) -ge 60 ]; then
+        local ot; ot=$(st "$m" TICKET); rm -f "$d/ASLEEP"
+        echo "$(date -u +%FT%TZ) watch -> $m $ot - its session ended mid-ticket: started again to pick it up" >> "$H/log"
+        (route "$m" "$ot" - - "[from watch] $ot: your session ended while you were on it. Pick it up where your tree and \$COMPANY_HOME/work/ leave it, then hand off as usual." </dev/null >/dev/null 2>&1 &)
+      fi
+    fi
+    label "$m" asleep
+    return 0
+  fi
+  rm -f "$d/ASLEEP"
+  [ "$s" = working ] && echo "$now" > "$d/WORKED"
+  # A message held for the ticket m is on now joins that work (anite's ROB-3998 note waited while nora worked ROB-3998).
+  local ct; ct=$(st "$m" TICKET)
+  if [ -n "$ct" ] && [ -s "$H/queue/$m" ] && awk -F'\t' -v t="$ct" '$2 == t { f = 1 } END { exit !f }' "$H/queue/$m"; then
+    (move "$m" "$m" "$ct") >/dev/null 2>&1
+  fi
+  # After `company done`, once m's turn has ended: its next held message, or a cleared context. A message delivered to m
+  # in between (set_ticket) took DONE away.
+  if [ -f "$d/DONE" ] && { [ "$s" = idle ] || [ "$s" = done ]; }; then
+    rm -f "$d/DONE"; echo "$now" > "$d/NEXT"; ("$SKILL/scripts/company" _next "$m" </dev/null >/dev/null 2>&1 &)
+  fi
+  # A mirror with nothing left for MIRROR_IDLE_S snoozes: its session ends, and the next pile starts one again.
+  if [ -s "$d/MIRROR" ]; then
+    if { [ "$s" = idle ] || [ "$s" = done ]; } && [ ! -s "$d/TICKET" ] && [ ! -s "$H/queue/$m" ] && [ ! -f "$d/DONE" ]; then
+      [ -f "$d/IDLE" ] || echo "$now" > "$d/IDLE"
+      if [ $((now - $(cat "$d/IDLE"))) -ge "$MIRROR_IDLE_S" ]; then
+        echo "$(date -u +%FT%TZ) watch -> $m - snoozed: nothing left for $(st "$m" MIRROR)'s mirror" >> "$H/log"
+        rm -f "$d/IDLE" "$d/MIRROR"; touch "$d/SNOOZING"; (stop_session "$m" || rm -f "$d/SNOOZING") >/dev/null 2>&1 &
+        return 0
+      fi
+    else rm -f "$d/IDLE"; fi
+  fi
+  # A status change since the last poll is work too, even a reply too short for a poll to see it working.
+  if [ -n "$q" ] && [ "$q" != "$(st "$m" SEQ)" ]; then
+    [ -f "$d/SEQ" ] && { echo "$now" > "$d/WORKED"; rm -f "$d/QUIET"; }
+    echo "$q" > "$d/SEQ"
+  fi
+  # A SendMessage its sender was told to send: m changed state since (it got it), or 90 s on and idle, typed in.
+  # ponytail: a member already working when it was sent counts as having it once it changes state.
+  if [ -s "$d/EXPECT" ] && [ -n "$q" ]; then
+    local at sq text; : > "$d/EXPECT.tmp"
+    while IFS=$'\t' read -r at sq text; do
+      [ "$sq" != "$q" ] && continue
+      if [ $((now - at)) -ge 90 ] && { [ "$s" = idle ] || [ "$s" = done ]; } && deliver "$m" "$text" >/dev/null 2>&1; then
+        echo "$(date -u +%FT%TZ) watch -> $m - typed in a message its sender never sent: ${text:0:100}" >> "$H/log"; continue
+      fi
+      printf '%s\t%s\t%s\n' "$at" "$sq" "$text" >> "$d/EXPECT.tmp"
+    done < "$d/EXPECT"
+    mv "$d/EXPECT.tmp" "$d/EXPECT"
+  fi
+  case $s in idle | done | working) rm -f "$d/DOWN" ;; esac
+  # A dialog for 15 s or more: only the human can answer it, in m's tab.
+  if [ "$s" = blocked ]; then
+    [ -f "$d/BLOCKED" ] || echo "$now" > "$d/BLOCKED"
+    if [ ! -f "$d/DIALOG" ] && [ $((now - $(cat "$d/BLOCKED"))) -ge 15 ]; then
+      touch "$d/DIALOG"; ding human
+      stuck "$m" anite "is stuck at a dialog in its tab, which only the human can answer; its tab reads HUMAN NEEDED"
+    fi
+  else
+    [ -f "$d/DIALOG" ] && ding answered
+    rm -f "$d/BLOCKED" "$d/DIALOG"
+  fi
+  # A usage limit: m resumes by itself at the reset; sam can move it to the other pool.
+  if herdr pane read "$(st "$m" CPANE)" --source visible --lines 8 2>/dev/null |
+    grep -qiE 'usage limit reached · continuing|goal paused · usage limit reached'; then
+    [ -f "$d/LIMIT" ] || { touch "$d/LIMIT"; ding stuck; stuck "$m" sam "is stopped by a usage limit and resumes by itself at the reset"; }
+  else rm -f "$d/LIMIT"; fi
+  if is_on "$m" always; then
+    # An always-on member's message held behind a dialog.
+    if [ -s "$H/queue/$m" ] && { [ "$s" = idle ] || [ "$s" = done ]; }; then watch_route "$m"
+    # A looping member (loop: <minutes> in its file, otto) idle that long starts its next round.
+    elif lp=$(field "$(mfile "$m")" loop) && [ -n "$lp" ]; then
+      case $s in
+        idle | done)
+          [ -f "$d/QUIET" ] || echo "$now" > "$d/QUIET"
+          if [ $((now - $(cat "$d/QUIET"))) -ge $((lp * 60)) ]; then
+            # No round while the company is at its cap; otherwise otto hunts back to back, its loop's minutes apart.
+            # q66: one nudge until m's state changes (it took it). A member that reads idle while its turn runs queues
+            # every nudge typed in, and otto got ~60 at once.
+            if [ "$(count_working)" -lt "$(cap)" ] && { [ -z "$q" ] || [ "$(cat "$d/NUDGED" 2>/dev/null)" != "$q" ]; }; then
+              rm -f "$d/QUIET"; deliver "$m" "[from watch] your next round" >/dev/null 2>&1 && echo "$q" > "$d/NUDGED"
+            fi
+          fi ;;
+        *) rm -f "$d/QUIET" ;;
+      esac
+    fi
+  else
+    # Quiet: idle on work with no handoff, as quinn was on 2026-09-26. Asked once; reported once if it doesn't answer.
+    # Waiting on a member: that member has m's message, or is on m's ticket, or is told it has nothing (lost or never sent).
+    if [ -s "$d/WAITING" ]; then
+      local who wt since chk what chased
+      # One wait parked under several tickets is one ask (vera's Linear wait under 3 keys nagged anite 3 times).
+      chased=$(awk -F'\t' '$4 == 1 { print $1 "\t" $5 }' "$d/WAITING")
+      : > "$d/WAITING.new"
+      while IFS=$'\t' read -r who wt since chk what; do
+        [ "$wt" = - ] && wt=""
+        case $since in '' | *[!0-9]*) what=$since; since=$(stat -f %m "$d/WAITING"); chk=0; [ -f "$d/WAITCHK" ] && chk=1 ;; esac
+        # A wait on a ticket that landed since is spent, as a held message is (q66): nora's file held 29, most landed.
+        # The key, or the ticket the text names first (nora's wait keyed ROB-4103 was for ROB-4136's ok).
+        local k="" x
+        for x in $wt $(printf '%s' "$what" | grep -oE 'ROB-[0-9]+' | head -1); do
+          # A parked ticket (stalled) that landed is spent whenever it was parked (nora's ROB-4124 and ROB-4041, parked after).
+          [ -f "$H/work/$x.landed" ] && { [ "$who" = stalled ] || [ "$since" -lt "$(stat -f %m "$H/work/$x.landed")" ]; } && { k=$x; break; }
+        done
+        if [ -n "$k" ]; then echo "$(date -u +%FT%TZ) watch -> $m $k - dropped $m's wait on $who: $k landed" >> "$H/log"; continue; fi
+        if [ "$chk" = 0 ] && [ "$who" != human ] && [ $((now - since)) -ge 300 ] &&
+          { [ $((now - since)) -ge 1800 ] || { { ! awake "$who" || is_free "$who"; } && { [ -z "$wt" ] || ! has_ticket "$who" "$wt"; }; }; }; then
+          chk=1
+          printf '%s\n' "$chased" | grep -qxF "$who	$what" && { printf '%s\t%s\t%s\t%s\t%s\n' "$who" "${wt:--}" "$since" "$chk" "$what" >> "$d/WAITING.new"; continue; }
+          chased="$chased
+$who	$what"
+          (COMPANY_MEMBER=watch ROUTED=1 wake "$who" "${wt:+$wt: }$m has waited on you since $(date -r "$since" +%H:%M) for: $what. Answer $m, or tell $m you can't.") >/dev/null 2>&1
+          tell_desk "$m${wt:+ ($wt)} has waited on $who since $(date -r "$since" +%H:%M) for: $what; $who is told."
+        fi
+        printf '%s\t%s\t%s\t%s\t%s\n' "$who" "${wt:--}" "$since" "$chk" "$what" >> "$d/WAITING.new"
+      done < "$d/WAITING"
+      mv "$d/WAITING.new" "$d/WAITING"
+    fi
+    # Idle on a ticket whose last handoff was for it, with work held: that handoff is a wait, and the ticket parks as
+    # company waiting does (nora told sam ROB-4103 was red and went done on it; an approved ROB-4093 waited 23 min).
+    if { [ "$s" = idle ] || [ "$s" = done ]; } && [ -s "$d/TICKET" ] && [ ! -f "$d/DONE" ] && [ ! -s "$d/EXPECT" ] && [ -s "$H/queue/$m" ] && ! nexting "$m"; then
+      local ct hts hw ht hx
+      ct=$(st "$m" TICKET)
+      read -r hts _ _ hw ht hx <<< "$(awk -v m="$m" '$2 == m && $3 == "->" { l = $0 } END { print l }' "$H/log" 2>/dev/null)"
+      hts=$(date -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$hts" +%s 2>/dev/null || echo 0)
+      if [ "$ht" = "$ct" ] && [ "$hts" -ge "$(stat -f %m "$d/TICKET")" ] && [ $((now - hts)) -ge 120 ]; then
+        printf '%s\t%s\t%s\t0\t%s\n' "$hw" "$ct" "$hts" "$(printf '%s' "$hx" | tr '\t' ' ' | cut -c1-200)" >> "$d/WAITING"
+        rm -f "$d/"{TICKET,QUIET,ASKED,TOLD}
+        echo "$(date -u +%FT%TZ) watch -> $m $ct - handed $ct to $hw and idle with work held: $ct parked as a wait on $hw, its next message now" >> "$H/log"
+      fi
+    fi
+    # Idle with nothing on and messages held (a parked ticket, a delivery that failed): the next one, now; not while
+    # _next hands it one (rhea got ROB-4291 and ROB-4289 4 s apart, and lost the first).
+    if { [ "$s" = idle ] || [ "$s" = done ]; } && [ ! -s "$d/TICKET" ] && [ ! -f "$d/DONE" ] && [ ! -s "$d/EXPECT" ] && [ -s "$H/queue/$m" ] && ! nexting "$m"; then
+      watch_route "$m"
+    fi
+    # Quiet counts only on a ticket: idle with none is free, not stuck (every member was asked 3 min after company done).
+    [ -s "$d/TICKET" ] || rm -f "$d/"{QUIET,ASKED,TOLD}
+    case $s in
+      idle | done)
+        [ -s "$d/TICKET" ] || { label "$m" "$s"; return 0; }
+        [ -f "$d/QUIET" ] || echo "$now" > "$d/QUIET"
+        if [ ! -f "$d/ASKED" ]; then
+          if [ $((now - $(cat "$d/QUIET"))) -ge "$QUIET_S" ]; then
+            echo "$now" > "$d/ASKED"
+            deliver "$m" "[from watch] You've been idle $((QUIET_S / 60)) min with no handoff. Blocked: tell anite and the member who gave you the work (Blockers). Finished: hand off, then company done. Waiting on a reply: company waiting <member|human> \"<what>\"." >/dev/null 2>&1
+          fi
+        elif [ ! -f "$d/TOLD" ] && [ "$(cat "$d/WORKED" 2>/dev/null || echo 0)" -lt "$(cat "$d/ASKED")" ] &&
+          [ $((now - $(cat "$d/ASKED"))) -ge 180 ]; then
+          touch "$d/TOLD"; ding stuck
+          stuck "$m" anite "has been idle since $(date -r "$(cat "$d/QUIET")" +%H:%M) with no handoff and doesn't answer the watcher"
+        # Answered the ask, then idle on the ticket again (quinn on ROB-4058 3 h, 5 checks held behind it): 30 min on, the
+        # ticket is parked, as company waiting does, and the next held message comes; with none held, anite hears once.
+        elif [ $((now - $(cat "$d/ASKED"))) -ge 1800 ] && [ $((now - $(cat "$d/WORKED" 2>/dev/null || echo 0))) -ge 1800 ]; then
+          local ct; ct=$(st "$m" TICKET)
+          if [ -s "$H/queue/$m" ] && [ ! -s "$d/EXPECT" ]; then
+            printf 'stalled\t%s\t%s\t1\tidle on it since %s\n' "$ct" "$now" "$(date -r "$(cat "$d/WORKED" 2>/dev/null || echo "$now")" +%H:%M)" >> "$d/WAITING"
+            rm -f "$d/"{TICKET,QUIET,ASKED,TOLD}
+            echo "$(date -u +%FT%TZ) watch -> $m $ct - idle on $ct 30 min after it was asked, with work held: $ct parked, its next message now" >> "$H/log"
+            watch_route "$m"
+          elif [ ! -f "$d/TOLD" ]; then
+            touch "$d/TOLD"; ding stuck
+            stuck "$m" anite "has been idle on $ct since $(date -r "$(cat "$d/WORKED" 2>/dev/null || echo "$now")" +%H:%M), after it answered the watcher, with no handoff"
+          fi
+        fi ;;
+      *) rm -f "$d/QUIET" ;;
+    esac
+    # Working again well after it was asked: its next quiet stretch is asked again.
+    if [ -f "$d/ASKED" ] && [ "$(cat "$d/WORKED" 2>/dev/null || echo 0)" -gt $(($(cat "$d/ASKED") + 120)) ]; then rm -f "$d/ASKED" "$d/TOLD"; fi
+  fi
+  label "$m" "$s"
+}
+
+# watch [--tab | --once]: the company's watcher; boot starts it in a tab of its own (--tab). Every 10 s each member's
+# tab shows its state; a dialog or a quiet member is reported to anite and a usage limit to sam, each also to the member
+# who gave it the work; held messages reach always-on members; wakes held at the cap start when a slot frees.
+# ponytail: polls herdr every 10 s; herdr's events.subscribe (pane.agent_status_changed) is the upgrade if lag matters.
+watch_() {
+  local pidf=$H/watch.pid list m s q fp
+  if [ "${1:-}" = --tab ]; then watch_tab; return; fi
+  if [ -s "$pidf" ] && kill -0 "$(cat "$pidf")" 2>/dev/null; then die "the watcher already runs (pid $(cat "$pidf"))"; fi
+  echo $$ > "$pidf"
+  export COMPANY_MEMBER=watch
+  # In a terminal (the watch tab's left pane) the log streams as it's written, beside the poll.
+  if [ -t 1 ]; then
+    printf '\033[1mHandoffs\033[0m  \033[2mlive, newest at the bottom; the watcher checks everyone every 10 s\033[0m\n'
+    (tail -n 30 -F "$H/log" 2>/dev/null | feed) & fp=$!
+    trap 'pkill -P "$fp" 2>/dev/null; kill "$fp" 2>/dev/null; rm -f "$pidf"' EXIT
+    # Ctrl-C is the human stopping it: no beat left, so nothing starts it again. Killed or its tab closed: autowatch does.
+    trap 'rm -f "$H/watch.beat"; exit 0' INT
+    trap 'exit 0' TERM HUP
+  fi
+  while :; do
+    if list=$(herdr agent list 2>/dev/null); then
+      for m in $(ls "$H/state"); do
+        read -r s q <<<"$(jq -r --arg m "$m" '[.result.agents[] | select(.name == $m) |
+          "\(.agent_status) \(.state_change_seq // "")"][0] // "asleep"' <<<"$list")"
+        watch_one "$m" "$s" "$q"
+      done
+      winddown_check
+      [ -s "$H/queue/_company" ] && (drain) >/dev/null 2>&1
+      stale; orphans; mirror; rebuild
+      touch "$H/watch.beat"
+    fi
+    [ "${1:-}" = --once ] && { rm -f "$pidf"; return 0; }
+    sleep 10
+  done
+}
+# autowatch: the watcher is down (its beat 90 s old and its pid gone): any company command starts it again, without its
+# tab, and says so; the dash pane runs one every 5 s, so it is back within seconds.
+autowatch() {
+  [ -z "${COMPANY_NO_AUTOWATCH:-}" ] && [ -f "$H/watch.beat" ] || return 0
+  [ $(($(date +%s) - $(stat -f %m "$H/watch.beat"))) -ge 90 ] || return 0
+  [ -s "$H/watch.pid" ] && kill -0 "$(cat "$H/watch.pid")" 2>/dev/null && return 0
+  touch "$H/watch.beat"
+  echo "$(date -u +%FT%TZ) $(me) -> watch - the watcher was down: started again, without its tab (company watch --tab gives it one)" >> "$H/log"
+  ding stuck
+  (nohup "$SKILL/scripts/company" watch </dev/null >/dev/null 2>&1 &)
+}
+watch_tab() {
+  local r p
+  if [ -s "$H/watch.pid" ] && kill -0 "$(cat "$H/watch.pid")" 2>/dev/null; then echo "the watcher runs (pid $(cat "$H/watch.pid"))"; return 0; fi
+  r=$(herdr tab create --workspace "${HERDR_WORKSPACE_ID:-w1}" --label watch --cwd "$H" --no-focus) || die "tab create: $r"
+  p=$(jq -r '.result.root_pane.pane_id' <<<"$r"); settle "$p"
+  herdr pane run "$p" "'$SKILL/scripts/company' watch" >/dev/null || die "could not start the watcher"
+  if r=$(herdr pane split "$p" --direction right --cwd "$H" --no-focus); then
+    p=$(jq -r '.result.pane.pane_id' <<<"$r"); settle "$p"; herdr pane run "$p" "'$SKILL/scripts/company' dash --live" >/dev/null
+  fi
+  echo "the watcher runs in tab $(jq -r '.result.tab.tab_id' <<<"$r")"
+}
+
+boot() {
+  local n=8 m
+  if [ "${1:-}" = --cap ]; then n=${2:?boot --cap <n>}; fi
+  test "${HERDR_ENV:-}" = 1 || die "boot runs inside herdr"
+  echo "$n" > "$H/cap"
+  [ -f "$H/pool" ] || echo token > "$H/pool"
+  for m in ted anite sam otto; do
+    start "$m" || echo "no slot for $m: the cap is $n"
+  done
+  watch_tab
+  ding ready
+  board
+}
+
+# adopt <m> <claude pane> <shell pane>: a session already running joins as m. It then runs /rename <m> itself and
+# reads prompts/<m>.md.
+adopt() {
+  local m=${1:?adopt <member> <claude pane> <shell pane>} cp=${2:?} sp=${3:?} r old
+  [ -f "$SKILL/members/$m.md" ] || die "no member file for $m"
+  r=$(herdr pane get "$cp") || die "no pane $cp"
+  mkdir -p "$H/state/$m"
+  rm -f "$H/state/$m/HELD_BY"
+  jq -r '.result.pane.tab_id' <<<"$r" > "$H/state/$m/TAB"
+  echo "$cp" > "$H/state/$m/CPANE"; echo "$sp" > "$H/state/$m/SPANE"; echo "$m" > "$H/state/$m/ROLE"
+  echo login > "$H/state/$m/POOL"; echo as-is > "$H/state/$m/MODEL"; echo as-is > "$H/state/$m/EFFORT"
+  old=$(herdr agent list | jq -r --arg p "$cp" '.result.agents[] | select(.pane_id == $p) | .name // empty')
+  if [ -n "$old" ] && [ "$old" != "$m" ]; then herdr agent rename "$old" "$m" >/dev/null || die "could not rename $old"; fi
+  build "$m"
+  label "$m"
+  echo "adopted $m in $cp: it runs /rename $m and reads $H/prompts/$m.md"
+}
+
+usage() {
+  cat <<'EOF'
+company boot [--cap N]                 set the cap, start ted, anite, sam, otto and the watcher
+company wake <m> "<ROB-x: message>" [--model M --effort E]
+                                       deliver now, start m, or hold (on another ticket, or at the cap)
+company done                           your part is over: next held message, or sleep
+company human "<what>"                 your tab reads HUMAN NEEDED <minutes> until: company human off
+company ding <sound>                   play $COMPANY_HOME/sounds/<sound>.mp3
+company watch [--tab]                  the watcher: tab states, dialogs, usage limits, quiet members (boot starts it)
+company board                          who is awake, on what, what waits, the claims
+company move <from> <to> [<n>]         hand <to> the newest n (default half) of the messages held for <from>
+company dash [--live]                  the company at a glance: needs you, work by ticket, team, down, held; --live redraws
+company start <m> [--as jon|rebecca] [--model M] [--effort E] [--pool login|token]
+company stop <m>                       end m's session
+company off <m> "<why>" | on <m>       keep m down (its usage ran out), wakes held; on: back
+company names                          free names for extra engineers
+company claim ROB-x <path>...          hold paths until ROB-x lands; fails when another ticket holds one
+company release ROB-x                  drop a claim (land.sh push releases it itself)
+company tree [m]                       a member's worktree path
+company tree start ROB-x|main          your tree on origin/main, with ROB-x's saved work
+company tree save ROB-x                save your tree's work as work/ROB-x.patch
+company run '<command>'                run it in your shell pane, from your tree, and wait; prints its last 200 lines
+                                       and "run exit=<code>"
+company wait                           keep waiting on a run that passed 9 minutes
+company check                          bun run check under the machine-wide lock; ends "check exit=<code>"
+company build <m> [role]               rebuild prompts/<m>.md
+company adopt <m> <claude pane> <shell pane>
+company winddown [off | <percent>]     at the mark (50% of Claude's 7d usage) new tickets are held, those on hand finish
+EOF
+}
+
+# main: the whole dispatch in one function, read in full before it runs, so the script can be edited while a command of
+# it runs (rex's company run once read the new file from the old offset: "line 1202: s: unbound variable").
+main() {
+case ${1:-help} in watch | _next | help | ding) ;; *) autowatch ;; esac
+case ${1:-help} in
+  boot) shift; boot "$@" ;;
+  start) shift; start "$@"; rc=$?; [ $rc = 3 ] && echo "the company is at its cap ($(cap)): nothing started"; exit $rc ;;
+  wake) shift; wake "$@" ;;
+  done) done_ ;;
+  human) shift; human_ "$@" ;;
+  waiting) shift; waiting_ "$@" ;;
+  ding) ding "${2:?ding <sound>: ready human answered landed stuck}" ;;
+  watch) shift; watch_ "$@" ;;
+  _next) NEXTING=1 next_ "${2:?}"; rc=$?; rm -f "$H/state/$2/NEXT"; exit $rc ;;
+  stop) shift; stop "$@" ;;
+  off) shift; off "$@" ;;
+  on) on "${2:-}" ;;
+  board) board ;;
+  dash) shift; dash "$@" ;;
+  move) shift; move "$@" ;;
+  names) names ;;
+  claim) shift; claim "$@" ;;
+  release) release "${2:-}" ;;
+  tree) shift; tree "$@" ;;
+  check) check ;;
+  run) shift; run_ "$*" ;;
+  wait) wait_ ;;
+  build) shift; build "$@" ;;
+  adopt) shift; adopt "$@" ;;
+  winddown) shift; winddown "$@" ;;
+  *) usage ;;
+esac
+}
+main "$@"; exit $?

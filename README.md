@@ -51,7 +51,7 @@ The categories below are for browsing only.
 
 | Category | Skills |
 |---|---|
-| Workflow | `prep`, `ship-pr`, `foreman` |
+| Workflow | `prep`, `ship-pr`, `foreman`, `company` |
 | Review | `pr-review-orchestrator` |
 | Frontend and SEO | `json-ld`, `ui-match` |
 | Sanity | `sanity-kb-setup`, `sanity-plugin-md-notes` |
