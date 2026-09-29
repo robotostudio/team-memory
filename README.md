@@ -58,3 +58,11 @@ The categories below are for browsing only.
 
 Adding a skill: put it in `skills/<name>/SKILL.md` and add it to the table above.
 The pack picks it up from `main`.
+
+The pack also includes public skills added in the skills.sh pack editor (not in this repo):
+
+| Source | Skills |
+|---|---|
+| `mattpocock/skills` | `tdd`, `grilling`, `grill-with-docs`, `improve-codebase-architecture`, `handoff`, `triage` |
+| `emilkowalski/skills` | `emil-design-eng`, `improve-animations`, `find-animation-opportunities`, `mobile-native` |
+| `shadcn-ui/ui` | `shadcn` |
