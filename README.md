@@ -52,7 +52,7 @@ Team skills live in `skills/` and are distributed as packs on skills.sh
 |---|---|
 | Workflow | `prep`, `ship-pr`, `foreman` |
 | Review | `pr-review-orchestrator` |
-| Frontend and SEO | `json-ld`, `ui-match` |
+| Frontend and SEO | `json-ld`, `ui-match`, `roboto-style-guide` |
 | Sanity | `sanity-kb-setup`, `sanity-plugin-md-notes` |
 
 Adding a skill: put it in `skills/<name>/SKILL.md`, add it to the table above,
