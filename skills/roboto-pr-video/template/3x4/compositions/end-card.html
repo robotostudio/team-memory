@@ -1,0 +1,55 @@
+<!--
+  Reference end card (design.md alpha.4 → end-card): the typed wordmark on a flat ground.
+  index.html starts this scene at the hand-off: in its first 0.55s the outgoing card grows to
+  fill the frame and becomes this flat ground. Then:
+    0.75s  the wordmark types on, a letter every 0.1s (R · O · B · O · T · O), STUDIO 0.25s later
+           (the music's drum hit lands on the last letter, 1.25s)
+    1.7s   one line + one mono label rise
+    3.7s   everything fades over 0.5s
+  Reuse: set the two lines with the host's data-variable-values.
+-->
+<template>
+  <style>
+    #root { position: absolute; inset: 0; overflow: hidden; font-family: "Geist", sans-serif; color: var(--ink);
+      -webkit-font-smoothing: antialiased; }
+    #ec-group { position: absolute; inset: 0; }
+    #ec-drift { position: absolute; inset: 0; transform-origin: 540px 760px; }
+    #ec-mark { position: absolute; left: 260px; top: 692px; width: 560px; height: 56px; }
+    #ec-mark img { position: absolute; left: 0; top: 0; width: 560px; height: 56px; }
+    #ec-line1 { position: absolute; left: 0; right: 0; top: 800px; text-align: center; font-size: 34px; letter-spacing: -0.02em; }
+    #ec-meta { position: absolute; left: 0; right: 0; top: 866px; text-align: center; font: 400 22px "Geist Mono", monospace;
+      letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); }
+  </style>
+
+  <div id="root" data-composition-id="end-card" data-width="1080" data-height="1440"
+    data-composition-variables='[
+      {"id":"line","type":"string","label":"What shipped","default":"20 shipped · 5 in review"},
+      {"id":"meta","type":"string","label":"Client or repo · date","default":"PD Blowers · 16 Nov 2026"}
+    ]'>
+    <div id="ec-group"><div id="ec-drift" data-layout-allow-overflow>
+      <div id="ec-mark">
+        <img class="on-dark" src="assets/brand/roboto-wordmark-dark.svg" alt="Roboto Studio" />
+        <img class="on-light" src="assets/brand/roboto-wordmark-light.svg" alt="Roboto Studio" />
+      </div>
+      <div id="ec-line1" data-var-text="line">20 shipped · 5 in review</div>
+      <div id="ec-meta" data-var-text="meta">PD Blowers · 16 Nov 2026</div>
+    </div></div>
+  </div>
+
+  <script>
+    (function () {
+      const tl = gsap.timeline({ paused: true });
+      // right edge of each letter in the 182-unit wordmark: R O B O T O, then STUDIO
+      const STEPS = [22.5, 48.3, 75.1, 100.4, 121.3, 146];
+      const clip = (x) => `inset(0 ${(100 - (x / 182) * 100).toFixed(2)}% 0 0)`;
+      tl.fromTo("#ec-mark", { clipPath: clip(0) }, { clipPath: clip(0), duration: 0.01, ease: "none" }, 0);
+      STEPS.forEach((x, i) => tl.to("#ec-mark", { clipPath: clip(x), duration: 0.01, ease: "none" }, 0.75 + i * 0.1));
+      tl.to("#ec-mark", { clipPath: clip(182), duration: 0.01, ease: "none" }, 1.5);
+      tl.fromTo("#ec-line1", { y: 16, opacity: 0, filter: "blur(4px)" }, { y: 0, opacity: 1, filter: "blur(0px)", duration: 0.6, ease: "expo.out" }, 1.7);
+      tl.fromTo("#ec-meta", { y: 16, opacity: 0, filter: "blur(4px)" }, { y: 0, opacity: 1, filter: "blur(0px)", duration: 0.6, ease: "expo.out" }, 1.82);
+      tl.fromTo("#ec-drift", { scale: 1 }, { scale: 1.02, duration: 2.7, ease: "sine.inOut" }, 1.5);   // never frozen
+      tl.fromTo("#ec-group", { opacity: 1 }, { opacity: 0, duration: 0.5, ease: "power2.in" }, 3.7);
+      window.__timelines["end-card"] = tl;
+    })();
+  </script>
+</template>

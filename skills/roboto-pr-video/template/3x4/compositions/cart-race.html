@@ -1,0 +1,291 @@
+<!--
+  Reference beat (design.md, social profile, 3:4): title → cart-race POC (hybrid) → hand-off.
+  One sharp card (900×1100) carries the whole beat. The POC is three framings of
+  one object, each led by one short sentence (no diagram, almost no labels):
+    0–3.3s     title: words arrive in Geist Pixel Square and swap to Geist 400 in place
+    3.3–7.5s   CLOSE-UP  the storefront's real cart drawer, zoomed in on the line item. Two clicks: 1 → 2 → 3,
+               the line total and subtotal following.
+               Then it rolls back to 2 on its own (red).
+    7.5–12.1s  WHY       the cart steps aside (still live); a request log shows the two requests racing
+               with live timers. The older one answers last and overwrites.
+    12.1–18.4s AFTER     the same race. The stale response is ignored; the cart holds 3
+               and returns to the close-up.
+    18.4s+     the card grows to fill the frame and becomes the end card's ground
+  Ideas borrowed (motionreference.com): Granola "Agent Brief" (extreme close-up, one sentence
+  at a time), AgentMail "Agent Calendar" (statement + one live UI, timing shown as a clock).
+-->
+<template>
+  <style>
+    #root { position: absolute; inset: 0; overflow: hidden; font-family: "Geist", sans-serif; color: var(--ink);
+      -webkit-font-smoothing: antialiased; }
+    #cr-cam { position: absolute; inset: 0; }
+    #cr-card { position: absolute; left: 90px; top: 170px; width: 900px; height: 1100px; background: var(--card);
+      box-shadow: var(--card-shadow); transform-origin: 450px 550px; overflow: hidden; }
+
+    /* title: tight Geist 400, centred; each word has a pixel twin in the same line box */
+    #cr-hook { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+      font-size: 80px; font-weight: 400; letter-spacing: -0.04em; line-height: 1.02; }
+    .cr-w { position: relative; display: inline-block; white-space: pre; }
+    .cr-w .cr-s { opacity: 0; }
+    .cr-w .cr-p { position: absolute; left: 0; top: 0; font-family: "Geist Pixel Square", monospace; font-size: 1em;
+      letter-spacing: 0; opacity: 0; }
+
+    /* the statement: one tag + one sentence at a time, in a left column */
+    .cr-tag { position: absolute; left: 64px; top: 60px; height: 48px; padding: 0 18px; display: flex; align-items: center;
+      font: 400 22px "Geist Mono", monospace; letter-spacing: 0.16em; color: var(--ink); background: var(--field);
+      box-shadow: inset 0 0 0 1.5px var(--field-ring); }
+    .cr-say { position: absolute; left: 64px; top: 136px; width: 780px; font-size: 54px; font-weight: 400; letter-spacing: -0.04em;
+      line-height: 1.04; }
+
+    /* the real UI: the storefront's cart drawer, in its own light theme whatever the film's theme.
+       760×600 at natural size; shown at 1.1× in the close-up, 0.5× above the log */
+    #cr-cart { position: absolute; left: 32px; top: 290px; width: 760px; height: 600px; transform-origin: 0 0;
+      background: #ffffff; color: #0a0a0a; box-shadow: 0 30px 80px -20px #00000059, 0 0 0 1px #e5e7eb; --m: #6b7280; --h: #e5e7eb; }
+    #cr-cart .c-head { position: absolute; left: 28px; right: 28px; top: 0; height: 76px; display: flex; align-items: center;
+      justify-content: space-between; border-bottom: 1px solid var(--h); }
+    #cr-cart .c-head b { font-size: 30px; font-weight: 500; letter-spacing: -0.02em; }
+    #cr-cart .c-head span { font-size: 22px; color: var(--m); }
+    #cr-cart .c-thumb { position: absolute; left: 28px; top: 104px; width: 160px; height: 176px; background: #f4f4f5; overflow: hidden; }
+    #cr-cart .c-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    #cr-cart .c-name { position: absolute; left: 216px; top: 102px; font-size: 28px; font-weight: 500; letter-spacing: -0.02em; white-space: nowrap; }
+    #cr-cart .c-var { position: absolute; left: 216px; top: 142px; font-size: 22px; color: var(--m); white-space: nowrap; }
+    #cr-cart .c-each { position: absolute; left: 216px; top: 172px; font-size: 22px; color: var(--m); white-space: nowrap; }
+    .cr-btn { position: absolute; top: 224px; width: 56px; height: 56px; display: grid; place-items: center; background: #ffffff;
+      box-shadow: inset 0 0 0 1px #d1d5db; color: #0a0a0a; }
+    .cr-btn svg { width: 24px; height: 24px; }
+    #cr-minus { left: 216px; color: #9ca3af; }
+    #cr-plus { left: 344px; }
+    #cr-qty { position: absolute; left: 272px; top: 224px; width: 72px; height: 56px; overflow: hidden; box-shadow: inset 0 0 0 1px #d1d5db; }
+    #cr-digits { position: absolute; left: 0; top: 0; width: 72px; }
+    #cr-digits div { height: 56px; display: grid; place-items: center; font-size: 28px; font-variant-numeric: tabular-nums; }
+    .cr-ring { position: absolute; left: 268px; top: 220px; width: 80px; height: 64px; opacity: 0; }
+    #cr-ring-bad { box-shadow: inset 0 0 0 3px #d6453d, 0 0 26px -2px #d6453dcc; }
+    #cr-ring-good { box-shadow: inset 0 0 0 3px #2e9e6b, 0 0 22px -4px #2e9e6b99; }
+    .c-money { position: absolute; right: 28px; height: 40px; width: 240px; overflow: hidden; }
+    .c-money > div { position: absolute; right: 0; top: 0; }
+    .c-money > div > div { height: 40px; display: flex; align-items: center; justify-content: flex-end; font-size: 30px;
+      font-weight: 500; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    #cr-line { top: 232px; }
+    #cr-cart .c-rule { position: absolute; left: 28px; right: 28px; top: 312px; height: 1px; background: var(--h); }
+    #cr-cart .c-sub { position: absolute; left: 28px; top: 340px; font-size: 28px; letter-spacing: -0.02em; }
+    #cr-subtotal { top: 338px; }
+    #cr-cart .c-ship { position: absolute; left: 28px; top: 390px; font-size: 21px; color: var(--m); white-space: nowrap; }
+    #cr-cart .c-pay { position: absolute; left: 28px; right: 28px; top: 452px; height: 68px; display: grid; place-items: center;
+      background: #0b1f5c; color: #ffffff; font-size: 26px; font-weight: 500; letter-spacing: -0.01em; }
+    #cr-cart .c-more { position: absolute; left: 0; right: 0; top: 540px; text-align: center; font-size: 21px; color: var(--m); }
+
+    /* the request log: two rows with live timers */
+    #cr-log { position: absolute; left: 64px; top: 604px; width: 772px; }
+    .cr-row { position: relative; height: 196px; }
+    .cr-row + .cr-row { margin-top: 40px; }
+    .cr-req { position: absolute; left: 0; top: 0; font: 400 26px "Geist Mono", monospace; color: var(--muted); white-space: nowrap; }
+    .cr-chip { position: absolute; left: 0; top: 48px; height: 64px; padding: 0 22px; display: flex; align-items: center;
+      font-size: 36px; letter-spacing: -0.02em; background: var(--field); box-shadow: inset 0 0 0 1.5px var(--field-ring); }
+    .cr-chip .cr-strike { position: absolute; left: 12px; right: 12px; top: 32px; height: 2px; background: var(--ink); transform-origin: left; }
+    .cr-time { position: absolute; right: 0; top: 40px; font-size: 72px; letter-spacing: -0.04em; font-variant-numeric: tabular-nums;
+      line-height: 1; }
+    .cr-time span { font-size: 36px; color: var(--muted); letter-spacing: -0.02em; margin-left: 4px; }
+    .cr-track { position: absolute; left: 0; right: 0; top: 136px; height: 3px; background: var(--hair); }
+    .cr-fill { position: absolute; left: 0; top: 0; width: 100%; height: 3px; background: var(--ink); transform-origin: left; }
+    .cr-note { position: absolute; left: 0; top: 156px; display: flex; align-items: center; gap: 12px; font-size: 28px;
+      letter-spacing: -0.015em; white-space: nowrap; }
+    .cr-note svg { width: 26px; height: 26px; }
+    .cr-dot { width: 12px; height: 12px; background: #d6453d; box-shadow: 0 0 12px #d6453d; }
+    .cr-muted { color: var(--muted); }
+
+    #cr-cursor { position: absolute; left: 0; top: 0; width: 51px; height: 60px; opacity: 0; transform-origin: 4px 4px;
+      filter: drop-shadow(0 8px 18px #00000066); }
+  </style>
+
+  <div id="root" data-composition-id="cart-race" data-width="1080" data-height="1440">
+    <div id="cr-cam">
+      <div id="cr-card">
+        <div id="cr-hook">
+          <div><span class="cr-w"><span class="cr-s">Slow</span><span class="cr-p" data-layout-ignore>Slow</span></span> <span class="cr-w"><span class="cr-s">refresh?</span><span class="cr-p" data-layout-ignore>refresh?</span></span></div>
+          <div><span class="cr-w"><span class="cr-s">Newest</span><span class="cr-p" data-layout-ignore>Newest</span></span> <span class="cr-w"><span class="cr-s">change</span><span class="cr-p" data-layout-ignore>change</span></span> <span class="cr-w"><span class="cr-s">wins.</span><span class="cr-p" data-layout-ignore>wins.</span></span></div>
+        </div>
+
+        <div id="cr-body">
+          <div class="cr-tag" id="cr-tag-before" data-layout-allow-overlap>BEFORE</div>
+          <div class="cr-tag" id="cr-tag-after" data-layout-allow-overlap>AFTER</div>
+          <div class="cr-say" id="cr-say-1" data-layout-allow-overlap>Two quick clicks.</div>
+          <div class="cr-say" id="cr-say-2" data-layout-allow-overlap>Then it rolls back.</div>
+          <div class="cr-say" id="cr-say-3" data-layout-allow-overlap>The older request answered last.</div>
+          <div class="cr-say" id="cr-say-4" data-layout-allow-overlap>Now a stale answer is ignored.</div>
+          <div class="cr-say" id="cr-say-5" data-layout-allow-overlap>Newest change wins.</div>
+
+          <div id="cr-cart" data-layout-allow-overflow>
+            <div class="c-head"><b>Your cart</b><span>1 item</span></div>
+            <div class="c-thumb"><img src="assets/brand/product-ccs5.jpg" alt="" /></div>
+            <div class="c-name">CCS-5 Air Filter Silencer</div>
+            <div class="c-var">Flanged · Paper</div>
+            <div class="c-each">$980.77 each</div>
+            <div class="cr-btn" id="cr-minus"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="square"><path d="M5 12h14" /></svg></div>
+            <div id="cr-qty"><div id="cr-digits" data-layout-allow-overflow><div>0</div><div>1</div><div>2</div><div>3</div></div></div>
+            <div class="cr-btn" id="cr-plus"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="square"><path d="M5 12h14" /><path d="M12 5v14" /></svg></div>
+            <div class="cr-ring" id="cr-ring-bad"></div>
+            <div class="cr-ring" id="cr-ring-good"></div>
+            <div class="c-money" id="cr-line"><div class="cr-money-col" data-layout-allow-overflow><div>$0.00</div><div>$980.77</div><div>$1,961.54</div><div>$2,942.31</div></div></div>
+            <div class="c-rule"></div>
+            <div class="c-sub">Subtotal</div>
+            <div class="c-money" id="cr-subtotal"><div class="cr-money-col" data-layout-allow-overflow><div>$0.00</div><div>$980.77</div><div>$1,961.54</div><div>$2,942.31</div></div></div>
+            <div class="c-ship">Shipping and taxes calculated at checkout</div>
+            <div class="c-pay">Checkout</div>
+            <div class="c-more">Continue shopping</div>
+          </div>
+
+          <div id="cr-log">
+            <div class="cr-row" id="cr-row-a">
+              <div class="cr-req">PATCH /cart · sent first</div>
+              <div class="cr-chip"><span>qty 2</span><span class="cr-strike" id="cr-a-strike"></span></div>
+              <div class="cr-time"><b id="cr-a-time" style="font-weight: 400">0.0</b><span>s</span></div>
+              <div class="cr-track"><div class="cr-fill" id="cr-a-fill"></div></div>
+              <div class="cr-note" id="cr-a-bad" data-layout-allow-overlap><span class="cr-dot"></span>Answered last. Overwrote qty 3</div>
+              <div class="cr-note cr-muted" id="cr-a-ign" data-layout-allow-overlap>Ignored: a newer change exists</div>
+            </div>
+            <div class="cr-row" id="cr-row-b">
+              <div class="cr-req">PATCH /cart · sent second</div>
+              <div class="cr-chip"><span>qty 3</span></div>
+              <div class="cr-time"><b id="cr-b-time" style="font-weight: 400">0.0</b><span>s</span></div>
+              <div class="cr-track"><div class="cr-fill" id="cr-b-fill"></div></div>
+              <div class="cr-note" id="cr-b-ok">
+                <svg viewBox="0 0 24 24" fill="none" stroke="#2e9e6b" stroke-width="2.4" stroke-linecap="square"><path d="M20 6 9 17l-5-5" /></svg>Applied
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <svg id="cr-cursor" viewBox="0 0 34 40">
+        <path d="M3 3 L3 33 L11 25.5 L16.5 37.5 L21.5 35.2 L16 23.6 L27 23.6 Z" fill="#0a0a0a" stroke="#ffffff" stroke-width="1.8" stroke-linejoin="round" />
+      </svg>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      const tl = gsap.timeline({ paused: true });
+      const ENTER = "expo.out", GLIDE = "power2.inOut";
+      const O = 3.3;      // the POC starts here; before it, the title
+      const EXIT = 18.4;  // hand-off to the end card (index.html starts end-card.html here)
+      const DIGIT = 56, MONEY = 40;
+      // frame coordinates of the "+" button centre in the 1.1× close-up (card at 90,170; cart at 32,290)
+      const PLUS = { x: 526, y: 728 }, REST = { x: 820, y: 1180 };
+      const init = (sel, vars) => tl.fromTo(sel, vars, { ...vars, duration: 0.01 }, 0);   // start states, seek-safe
+
+      // ---- title: pixel → sans, word by word --------------------------------------------
+      tl.fromTo("#cr-card", { scale: 0.18 }, { scale: 1, duration: 0.5, ease: "power3.out" }, 0.1);
+      tl.fromTo("#cr-card", { opacity: 0 }, { opacity: 1, duration: 0.01, ease: "none" }, 0.1);
+      const words = gsap.utils.toArray("#cr-hook .cr-w");
+      [0.4, 0.62, 1.0, 1.22, 1.44].forEach((t, i) => {
+        const p = words[i].querySelector(".cr-p"), s = words[i].querySelector(".cr-s");
+        tl.fromTo(p, { opacity: 0 }, { opacity: 1, duration: 0.01, ease: "none" }, t);
+        tl.to(p, { opacity: 0, duration: 0.01, ease: "none" }, t + 0.2);
+        tl.fromTo(s, { opacity: 0 }, { opacity: 1, duration: 0.01, ease: "none" }, t + 0.2);
+      });
+      tl.fromTo("#cr-hook", { opacity: 1, filter: "blur(0px)" }, { opacity: 0, filter: "blur(8px)", duration: 0.2, ease: "power2.in" }, O - 0.25);
+
+      // ---- start states ---------------------------------------------------------------------
+      init("#cr-body", { opacity: 0 });
+      init("#cr-digits", { y: -1 * DIGIT });
+      init(".cr-money-col", { y: -1 * MONEY });
+      init("#cr-tag-after", { opacity: 0 });
+      ["#cr-say-1", "#cr-say-2", "#cr-say-3", "#cr-say-4", "#cr-say-5"].forEach((s) => init(s, { opacity: 0, filter: "blur(6px)" }));
+      init("#cr-log", { opacity: 0, y: 60 });
+      ["#cr-row-a", "#cr-row-b", "#cr-a-bad", "#cr-a-ign", "#cr-b-ok"].forEach((s) => init(s, { opacity: 0 }));
+      ["#cr-a-fill", "#cr-b-fill", "#cr-a-strike"].forEach((s) => init(s, { scaleX: 0 }));
+      init("#cr-cursor", { x: REST.x, y: REST.y, opacity: 0, scale: 1 });
+
+      // ---- helpers ------------------------------------------------------------------------------
+      const say = (n, t, prev) => {   // one sentence at a time: blur swap inside the card
+        if (prev) tl.to(`#cr-say-${prev}`, { opacity: 0, filter: "blur(6px)", duration: 0.13, ease: "power2.in" }, t - 0.13);
+        tl.to(`#cr-say-${n}`, { opacity: 1, filter: "blur(0px)", duration: 0.2, ease: ENTER }, t);
+      };
+      const qty = (n, t, d = 0.4) => {   // the stepper, the line total and the subtotal move together
+        tl.to("#cr-digits", { y: -n * DIGIT, duration: d, ease: "power3.out" }, t);
+        tl.to(".cr-money-col", { y: -n * MONEY, duration: d, ease: "power3.out" }, t + 0.05);
+      };
+      const money = (color, t) => tl.to(".cr-money-col", { color, duration: 0.2, ease: "none" }, t);
+      const press = (t) => {          // the "+" presses and releases on a spring
+        tl.to("#cr-plus", { scale: 0.92, duration: 0.08, ease: "power2.out" }, t);
+        tl.to("#cr-plus", { scale: 1, duration: 0.35, ease: "back.out(3)" }, t + 0.13);
+      };
+      const click = (t) => {
+        tl.to("#cr-cursor", { scale: 0.8, duration: 0.08, ease: "power2.out" }, t);
+        tl.to("#cr-cursor", { scale: 1, duration: 0.35, ease: "back.out(3)" }, t + 0.13);
+        press(t);
+      };
+      const timers = { a: { v: 0 }, b: { v: 0 } };
+      const show = (id) => () => { document.getElementById(`cr-${id}-time`).textContent = timers[id].v.toFixed(1); };
+      const request = (id, t, film, secs) => {   // a row appears, its bar fills and its timer counts to `secs`
+        tl.to(`#cr-row-${id}`, { opacity: 1, duration: 0.12, ease: "none" }, t);
+        tl.fromTo(`#cr-${id}-fill`, { scaleX: 0 }, { scaleX: 1, duration: film, ease: "none", immediateRender: false }, t);
+        tl.fromTo(timers[id], { v: 0 }, { v: secs, duration: film, ease: "none", immediateRender: false, onUpdate: show(id) }, t);
+        return t + film;
+      };
+
+      // ---- 1 · CLOSE-UP: two clicks, then it rolls back ----------------------------------------------
+      tl.to("#cr-body", { opacity: 1, duration: 0.01 }, O);
+      tl.fromTo("#cr-cart", { scale: 1.02, y: 40, opacity: 0 }, { scale: 1.1, y: 0, opacity: 1, duration: 0.5, ease: ENTER }, O);   // close-up on the real cart
+      tl.fromTo("#cr-tag-before", { opacity: 0 }, { opacity: 1, duration: 0.15, ease: "none" }, O + 0.1);
+      say(1, O + 0.2);
+      tl.to("#cr-cursor", { opacity: 1, duration: 0.15, ease: "none" }, O + 0.5);
+      tl.to("#cr-cursor", { x: PLUS.x, duration: 0.7, ease: GLIDE }, O + 0.5);
+      tl.to("#cr-cursor", { y: PLUS.y, duration: 0.7, ease: "power3.inOut" }, O + 0.5);
+      click(O + 1.3); qty(2, O + 1.35);
+      click(O + 1.75); qty(3, O + 1.8);
+      tl.to("#cr-cursor", { x: REST.x, y: REST.y, opacity: 0, duration: 0.6, ease: GLIDE }, O + 2.3);
+      qty(2, O + 3.0, 0.5);                                           // …on its own
+      tl.to("#cr-ring-bad", { opacity: 1, duration: 0.25, ease: ENTER }, O + 3.05);
+      money("#d6453d", O + 3.05);
+      say(2, O + 3.05, 1);
+
+      // ---- 2 · WHY: the stepper glides left, the two requests race --------------------------------------
+      const W = O + 4.2;
+      tl.to("#cr-cart", { x: 32, y: -30, scale: 0.5, duration: 0.8, ease: GLIDE }, W);   // the cart steps aside, still live
+      tl.to("#cr-ring-bad", { opacity: 0, duration: 0.15, ease: "none" }, W);
+      money("#0a0a0a", W);
+      qty(1, W + 0.25, 0.45);
+      tl.to("#cr-log", { opacity: 1, y: 0, duration: 0.6, ease: ENTER }, W + 0.3);
+      say(3, W + 0.35, 2);
+      press(W + 1.0); qty(2, W + 1.05);
+      const aEnd = request("a", W + 1.05, 2.0, 1.4);                  // slow: answers at W + 3.05
+      press(W + 1.45); qty(3, W + 1.5);
+      const bEnd = request("b", W + 1.5, 0.45, 0.2);                  // fast: answers at W + 1.95
+      tl.to("#cr-b-ok", { opacity: 1, duration: 0.15, ease: "none" }, bEnd);
+      qty(2, aEnd, 0.5);                                              // the older answer overwrites
+      tl.to("#cr-ring-bad", { opacity: 1, duration: 0.25, ease: ENTER }, aEnd + 0.05);
+      money("#d6453d", aEnd + 0.05);
+      tl.to("#cr-a-bad", { opacity: 1, duration: 0.15, ease: "none" }, aEnd + 0.05);
+
+      // ---- 3 · AFTER: the same race, the stale answer is ignored ------------------------------------------
+      const A = W + 4.6;
+      tl.to(["#cr-row-a", "#cr-row-b", "#cr-a-bad", "#cr-b-ok", "#cr-ring-bad"], { opacity: 0, duration: 0.15, ease: "none" }, A);
+      tl.to("#cr-tag-before", { opacity: 0, duration: 0.1, ease: "none" }, A + 0.05);
+      tl.to("#cr-tag-after", { opacity: 1, duration: 0.1, ease: "none" }, A + 0.15);
+      say(4, A + 0.2, 3);
+      money("#0a0a0a", A);
+      qty(1, A + 0.2, 0.45);
+      press(A + 0.8); qty(2, A + 0.85);
+      const aEnd2 = request("a", A + 0.85, 2.0, 1.4);
+      press(A + 1.25); qty(3, A + 1.3);
+      const bEnd2 = request("b", A + 1.3, 0.45, 0.2);
+      tl.to("#cr-b-ok", { opacity: 1, duration: 0.15, ease: "none" }, bEnd2);
+      tl.to("#cr-a-strike", { scaleX: 1, duration: 0.3, ease: GLIDE }, aEnd2);           // ignored: qty stays 3
+      tl.to("#cr-row-a .cr-req, #cr-row-a .cr-chip, #cr-row-a .cr-time, #cr-row-a .cr-track", { opacity: 0.45, duration: 0.3, ease: "none" }, aEnd2 + 0.1);   // the note stays readable
+      tl.to("#cr-a-ign", { opacity: 1, duration: 0.15, ease: "none" }, aEnd2 + 0.05);
+      tl.to("#cr-ring-good", { opacity: 1, duration: 0.25, ease: ENTER }, aEnd2 + 0.1);
+      // back to the close-up: the log leaves, the stepper returns to centre holding 3
+      const B = aEnd2 + 1.5;
+      tl.to("#cr-log", { opacity: 0, y: 60, duration: 0.35, ease: "power2.in" }, B);
+      tl.to("#cr-cart", { x: 0, y: 0, scale: 1.1, duration: 0.8, ease: GLIDE }, B + 0.05);
+      say(5, B + 0.4, 4);
+
+      // ---- exit: the card grows to fill the frame and becomes the end card's flat ground --------------------
+      tl.to("#cr-body", { opacity: 0, duration: 0.15, ease: "power2.in" }, EXIT);
+      tl.to("#cr-card", { scale: 1.36, duration: 0.5, ease: GLIDE }, EXIT + 0.05);
+
+      window.__timelines["cart-race"] = tl;
+    })();
+  </script>
+</template>
